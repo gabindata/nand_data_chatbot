@@ -1,0 +1,6 @@
+.cache/
+__pycache__/
+*.pyc
+.env
+uploaded_nand_health.csv
+uploaded_nand_health.parquet
