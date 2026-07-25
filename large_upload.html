@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <title>NAND Health 대용량 업로드</title>
+
+</head>
+
+
+<body>
+
+    <h2>🚀 대용량 파일 청크 업로드</h2>
+
+
+    <input
+        type="file"
+        id="fileInput"
+    >
+
+
+    <br><br>
+
+
+    <button
+        onclick="uploadFile()"
+    >
+
+        업로드 시작
+
+    </button>
+
+
+    <br><br>
+
+
+    <progress
+        id="progressBar"
+        value="0"
+        max="100"
+        style="width: 500px;"
+    >
+    </progress>
+
+
+    <p id="status">
+        파일을 선택하세요.
+    </p>
+
+
+<script>
+
+
+// FastAPI 서버 주소
+
+const SERVER_URL =
+    "http://127.0.0.1:8000";
+
+
+// 청크 크기
+
+const CHUNK_SIZE =
+    100 * 1024 * 1024;
+
+
+// =====================================
+// 파일 업로드
+// =====================================
+
+async function uploadFile() {
+
+
+    const fileInput =
+        document.getElementById(
+            "fileInput"
+        );
+
+
+    const file =
+        fileInput.files[0];
+
+
+    if (!file) {
+
+        alert(
+            "파일을 선택하세요."
+        );
+
+        return;
+
+    }
+
+
+    const status =
+        document.getElementById(
+            "status"
+        );
+
+
+    const progressBar =
+        document.getElementById(
+            "progressBar"
+        );
+
+
+    status.innerText =
+        "업로드 초기화 중...";
+
+
+    // =====================================
+    // 1. 업로드 초기화
+    // =====================================
+
+    const initData =
+        new FormData();
+
+
+    initData.append(
+        "filename",
+        file.name
+    );
+
+
+    initData.append(
+        "file_size",
+        file.size
+    );
+
+
+    let initResponse;
+
+try {
+
+    initResponse = await fetch(
+        SERVER_URL + "/upload/init",
+        {
+            method: "POST",
+            body: initData
+        }
+    );
+
+} catch (error) {
+
+    status.innerText =
+        "❌ FastAPI 서버에 연결할 수 없습니다.";
+
+    console.error(error);
+
+    return;
+}
+
+
+if (!initResponse.ok) {
+
+    const errorText =
+        await initResponse.text();
+
+    status.innerText =
+        "❌ 업로드 초기화 실패";
+
+    console.error(
+        initResponse.status,
+        errorText
+    );
+
+    return;
+}
+
+
+const uploadInfo =
+    await initResponse.json();
+
+
+    
+
+
+    const uploadId =
+        uploadInfo.upload_id;
+
+
+    const totalChunks =
+        uploadInfo.total_chunks;
+
+
+    const chunkSize =
+        uploadInfo.chunk_size;
+
+
+    // =====================================
+    // 2. 청크 업로드
+    // =====================================
+
+    for (
+
+        let chunkIndex = 0;
+
+        chunkIndex < totalChunks;
+
+        chunkIndex++
+
+    ) {
+
+
+        const start =
+            chunkIndex *
+            chunkSize;
+
+
+        const end =
+            Math.min(
+
+                start +
+                chunkSize,
+
+                file.size
+
+            );
+
+
+        const chunk =
+            file.slice(
+                start,
+                end
+            );
+
+
+        const chunkData =
+            new FormData();
+
+
+        chunkData.append(
+            "upload_id",
+            uploadId
+        );
+
+
+        chunkData.append(
+            "chunk_index",
+            chunkIndex
+        );
+
+
+        chunkData.append(
+
+            "chunk",
+
+            chunk,
+
+            `chunk_${chunkIndex}`
+
+        );
+
+
+        await fetch(
+
+            SERVER_URL +
+            "/upload/chunk",
+
+            {
+
+                method: "POST",
+
+                body: chunkData
+
+            }
+
+        );
+
+
+        const progress =
+
+            (
+
+                (chunkIndex + 1)
+
+                /
+
+                totalChunks
+
+            ) * 100;
+
+
+        progressBar.value =
+            progress;
+
+
+        status.innerText =
+
+            `업로드 중... ${
+                chunkIndex + 1
+            } / ${
+                totalChunks
+            } 청크`;
+
+    }
+
+
+    // =====================================
+    // 3. 업로드 완료
+    // =====================================
+
+    const completeData =
+        new FormData();
+
+
+    completeData.append(
+        "upload_id",
+        uploadId
+    );
+
+
+    completeData.append(
+        "filename",
+        file.name
+    );
+
+
+    completeData.append(
+        "total_chunks",
+        totalChunks
+    );
+
+
+    const completeResponse =
+        await fetch(
+
+            SERVER_URL +
+            "/upload/complete",
+
+            {
+
+                method: "POST",
+
+                body: completeData
+
+            }
+
+        );
+
+
+    const result =
+        await completeResponse.json();
+
+
+    status.innerText =
+        "✅ 업로드 완료!";
+
+
+    progressBar.value =
+        100;
+
+
+    console.log(
+        result
+    );
+
+
+}
+
+
+</script>
+
+
+</body>
+
+</html>
