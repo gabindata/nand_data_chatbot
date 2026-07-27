@@ -271,15 +271,10 @@ async def complete_upload(
 
     try:
 
-        data = pl.read_csv(
-            final_path
-        )
-
-
-        data.write_parquet(
-            parquet_file,
-            compression="zstd"
-        )
+        pl.scan_csv(final_path).sink_parquet(
+    parquet_file,
+    compression="zstd"
+)
 
 
     except Exception as e:

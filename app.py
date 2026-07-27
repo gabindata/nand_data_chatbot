@@ -9,6 +9,10 @@ import re
 # SQL 검증 설정
 # =====================================
 
+# =====================================
+# SQL 검증 설정
+# =====================================
+
 ALLOWED_TABLE = "nand_health"
 
 ALLOWED_COLUMNS = {
@@ -21,6 +25,7 @@ ALLOWED_COLUMNS = {
     "capacity_gb",
     "usage_hours"
 }
+
 def validate_sql(sql: str):
 
     if not sql or not sql.strip():
@@ -39,165 +44,72 @@ def validate_sql(sql: str):
 
     # 3. 위험한 SQL 명령 차단
     forbidden_keywords = [
-        "DROP",
-        "DELETE",
-        "UPDATE",
-        "INSERT",
-        "ALTER",
-        "CREATE",
-        "TRUNCATE",
-        "ATTACH",
-        "DETACH",
-        "COPY",
-        "EXPORT",
-        "IMPORT"
+        "DROP", "DELETE", "UPDATE", "INSERT", "ALTER",
+        "CREATE", "TRUNCATE", "ATTACH", "DETACH",
+        "COPY", "EXPORT", "IMPORT"
     ]
 
     for keyword in forbidden_keywords:
+        if re.search(rf"\b{keyword}\b", sql_upper):
+            return False, f"{keyword} 명령은 사용할 수 없습니다."
 
-        if re.search(
-            rf"\b{keyword}\b",
-            sql_upper
-        ):
+    # =====================================
+    # [수정] 문자열 리터럴 제거한 "검사 전용" SQL 생성
+    # 컬럼/테이블 토큰 검사는 이 버전으로만 수행하고,
+    # 실제 실행(con.execute)에는 원본 sql을 그대로 사용한다.
+    # =====================================
+    # 'It''s ok' 처럼 이스케이프된 작은따옴표(') 도 포함해서 안전하게 제거
+    sql_for_check = re.sub(r"'(?:[^']|'')*'", "''", sql)
 
-            return False, (
-                f"{keyword} 명령은 사용할 수 없습니다."
-            )
-
-    # 4. 테이블 검사
-    table_pattern = (
-        r"\b(?:FROM|JOIN)\s+"
-        r"([a-zA-Z_][a-zA-Z0-9_]*)"
-    )
-
-    tables = re.findall(
-        table_pattern,
-        sql,
-        re.IGNORECASE
-    )
+    # 4. 테이블 검사 (검사용 SQL 기준)
+    table_pattern = r"\b(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)"
+    tables = re.findall(table_pattern, sql_for_check, re.IGNORECASE)
 
     for table in tables:
-
         if table.lower() != ALLOWED_TABLE:
+            return False, f"허용되지 않은 테이블입니다: {table}"
 
-            return False, (
-                f"허용되지 않은 테이블입니다: {table}"
-            )
-
-    # 5. 컬럼 검사
+    # 5. 컬럼 검사 (검사용 SQL 기준 — 리터럴 내부 값은 여기 안 걸림)
     column_pattern = r"\b[a-zA-Z_][a-zA-Z0-9_]*\b"
+    tokens = re.findall(column_pattern, sql_for_check)
 
-    tokens = re.findall(
-        column_pattern,
-        sql
-    )
-    # AS 뒤에 나오는 별칭(alias) 추출
     alias_pattern = r"\bAS\s+([a-zA-Z_][a-zA-Z0-9_]*)"
-
     aliases = set(
-    alias.upper()
-    for alias in re.findall(
-        alias_pattern,
-        sql,
-        re.IGNORECASE
+        alias.upper()
+        for alias in re.findall(alias_pattern, sql_for_check, re.IGNORECASE)
     )
-)
-
-
-
-    
 
     sql_keywords = {
-        "SELECT",
-        "FROM",
-        "WHERE",
-        "GROUP",
-        "BY",
-        "ORDER",
-        "ASC",
-        "DESC",
-        "LIMIT",
-        "OFFSET",
-        "AS",
-        "AND",
-        "OR",
-        "NOT",
-        "IN",
-        "IS",
-        "NULL",
-        "BETWEEN",
-        "LIKE",
-        "CASE",
-        "WHEN",
-        "THEN",
-        "ELSE",
-        "END",
-        "COUNT",
-        "AVG",
-        "SUM",
-        "MAX",
-        "MIN",
-        "DISTINCT",
-        "HAVING",
-        "OVER",
-        "PARTITION",
-        "ROW_NUMBER",
-        "RANK",
-        "DENSE_RANK",
-        "TRUE",
-        "FALSE",
-        "MESSAGE"
+        "SELECT", "FROM", "WHERE", "GROUP", "BY", "ORDER", "ASC", "DESC",
+        "LIMIT", "OFFSET", "AS", "AND", "OR", "NOT", "IN", "IS", "NULL",
+        "BETWEEN", "LIKE", "CASE", "WHEN", "THEN", "ELSE", "END",
+        "COUNT", "AVG", "SUM", "MAX", "MIN", "DISTINCT", "HAVING",
+        "OVER", "PARTITION", "ROW_NUMBER", "RANK", "DENSE_RANK",
+        "TRUE", "FALSE", "MESSAGE"
     }
 
     sql_functions = {
-        "COUNT",
-        "AVG",
-        "SUM",
-        "MAX",
-        "MIN",
-        "ROUND",
-        "COALESCE",
-        "CAST",
-        "NULLIF"
+        "COUNT", "AVG", "SUM", "MAX", "MIN",
+        "ROUND", "COALESCE", "CAST", "NULLIF"
     }
 
     for token in tokens:
-
         token_upper = token.upper()
 
         if token_upper in aliases:
             continue
-
         if token_upper in sql_keywords:
             continue
-
         if token_upper in sql_functions:
             continue
-
         if token.lower() == ALLOWED_TABLE:
             continue
-
-        # 숫자나 일반적인 SQL 타입은 제외
-        if token_upper in {
-            "INTEGER",
-            "BIGINT",
-            "DOUBLE",
-            "VARCHAR",
-            "DECIMAL"
-        }:
+        if token_upper in {"INTEGER", "BIGINT", "DOUBLE", "VARCHAR", "DECIMAL"}:
             continue
 
-        # 허용된 컬럼인지 확인
         if token.lower() not in ALLOWED_COLUMNS:
-
-            # SQL 함수의 내부 단어 등은 제외
-            if token_upper not in {
-                "NAND_HEALTH"
-            }:
-
-                return False, (
-                    f"허용되지 않은 컬럼 또는 식별자입니다: {token}"
-                )
+            if token_upper not in {"NAND_HEALTH"}:
+                return False, f"허용되지 않은 컬럼 또는 식별자입니다: {token}"
 
     return True, ""
 
