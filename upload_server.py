@@ -250,20 +250,28 @@ async def complete_upload(
 
 
     # =====================================
-    # Excel → Parquet 자동 변환
+    # CSV → Parquet 자동 변환
     # =====================================
 
-    if safe_filename.lower().endswith(
-        (".xlsx", ".xls")
+    if not safe_filename.lower().endswith(
+        ".csv"
     ):
 
-        parquet_file = os.path.join(
-            PARQUET_DIR,
-            "nand_health.parquet"
+        raise HTTPException(
+            status_code=400,
+            detail="CSV 파일만 업로드할 수 있습니다."
         )
 
 
-        data = pl.read_excel(
+    parquet_file = os.path.join(
+        PARQUET_DIR,
+        "nand_health.parquet"
+    )
+
+
+    try:
+
+        data = pl.read_csv(
             final_path
         )
 
@@ -274,19 +282,25 @@ async def complete_upload(
         )
 
 
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"CSV 변환 실패: {str(e)}"
+        )
+
+
     # =====================================
     # 최근 업로드 파일 정보 저장
     # =====================================
 
     upload_info = {
 
-    "filename": safe_filename,
+        "filename": safe_filename,
 
-    "file_path": os.path.abspath(
-        parquet_file
-    )
-
-
+        "file_path": os.path.abspath(
+            parquet_file
+        )
 
     }
 
@@ -313,7 +327,7 @@ async def complete_upload(
 
         "filename": safe_filename,
 
-        "file_path": final_path
+        "file_path": parquet_file
 
     }
 # =====================================
