@@ -15,7 +15,7 @@ import re
 
 ALLOWED_TABLE = "nand_health"
 
-ALLOWED_COLUMNS = {
+ALLOWED_COLUMNS = {#컬럼 확정 후 수정
     "unit_id",
     "model",
     "pe_cycle",
@@ -456,7 +456,7 @@ client = OpenAI(api_key=api_key)
 
 
 # =====================================
-# 컬럼 설명
+# 예시)컬럼 확정 후 수정
 # =====================================
 
 schema = """
@@ -553,7 +553,7 @@ if question:
     st.chat_message("user").write(question)
 
     # =====================================
-    # AI SQL 생성
+    # AI SQL 생성 #컬럼 확정후 수정
     # =====================================
 
     with st.spinner("AI가 SQL을 생성하는 중..."):
