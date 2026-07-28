@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.DS_Store
+
+# generated data artifacts from data_pipeline/ and scripts/ — not meant to be committed
+uploads/
+converted_parquet/
+nand_health_parquet/
+nand_health_100mb.csv
+nand_health_300mb.xlsx
