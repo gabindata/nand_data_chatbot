@@ -1,27 +1,6 @@
-.cache/
 __pycache__/
 *.pyc
+.venv/
+venv/
 .env
-uploaded_nand_health.csv
-uploaded_nand_health.parquet
-# 대용량 원본 데이터
-*.xlsx
-*.xls
-*.csv
-
-# Parquet 데이터
-*.parquet
-converted_parquet/
-
-# 업로드 파일
-uploads/
-
-# 업로드 정보
-upload_info.json
-
-# API 키
-.env
-
-# Python 캐시
-__pycache__/
-*.pyc
+.streamlit/secrets.toml
