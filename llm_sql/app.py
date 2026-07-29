@@ -5,6 +5,11 @@ import os
 import requests
 import re
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LARGE_UPLOAD_HTML_PATH = os.path.join(
+    BASE_DIR, "..", "backend", "large_upload.html"
+)
+
 # =====================================
 # SQL 검증 설정
 # =====================================
@@ -15,15 +20,28 @@ import re
 
 ALLOWED_TABLE = "nand_health"
 
-ALLOWED_COLUMNS = {#컬럼 확정 후 수정
-    "unit_id",
-    "model",
+ALLOWED_COLUMNS = {
+    "vednor",
+    "density",
+    "pn",
+    "storage_used_already",
+    "storage_utilization",
+    "ufsid",
+    "rtbb",
+    "uecc",
+    "tbw",
     "pe_cycle",
-    "temperature_c",
-    "error_count",
-    "unstable_count",
-    "capacity_gb",
-    "usage_hours"
+    "tbr",
+    "reserved_b",
+    "spocount",
+    "read_reclaim",
+    "init_count",
+    "vcc_count",
+    "vccq_count",
+    "ffu_count",
+    "bedccount",
+    "bchecksumcount",
+    "bundefinstcount"
 }
 
 def validate_sql(sql: str):
@@ -319,7 +337,7 @@ else:
 
     # HTML 파일 읽기
     with open(
-        "large_upload.html",
+        LARGE_UPLOAD_HTML_PATH,
         "r",
         encoding="utf-8"
     ) as file:
@@ -464,37 +482,89 @@ schema = """
 
 컬럼 정의:
 
-- unit_id
-  의미: NAND 유닛 식별자
-  사용자 표현: 유닛, NAND, 장치, 제품 번호
+- vednor
+  의미: Memory 회사(제조사) 이름
+  사용자 표현: 회사, 제조사, 벤더, 브랜드
+
+- density
+  의미: UFS Memory 총 용량
+  사용자 표현: 용량, 총 용량, 메모리 용량, 저장 용량 스펙
+
+- pn
+  의미: UFS 제품 Part No.
+  사용자 표현: 제품 번호, Part No, 품번, 모델명
+
+- storage_used_already
+  의미: UFS Memory 실제 사용 중인 용량
+  사용자 표현: 사용 용량, 사용한 용량, 사용 중인 용량, 사용량
+
+- storage_utilization
+  의미: UFS Memory 총 용량 대비 사용 용량 비율(Portion)
+  사용자 표현: 사용률, 사용 비율, 용량 대비 사용률, 얼마나 찼는지
+
+- ufsid
+  의미: UFS 고유 ID
+  사용자 표현: 고유 ID, UFS ID, 장치 ID, 시리얼, 식별자
+
+- rtbb
+  의미: Run Time Bad Block, UFS에서 불량이 발생한 Block 개수
+  사용자 표현: 불량 블록, 런타임 불량 블록, Bad Block, 불량 블록 개수
+
+- uecc
+  의미: Uncorrected Error Correction Code, 정정되지 않은 Bit Error 발생 횟수
+  사용자 표현: 비트 에러, 비트 오류, 정정 안 된 에러, UECC, 오류, 에러
+
+- tbw
+  의미: Total Byte Written, UFS의 누적 쓰기량(Lifetime)
+  사용자 표현: 총 쓰기량, TBW, 누적 쓰기 바이트, 라이프타임 쓰기량
 
 - pe_cycle
-  의미: PE Cycle 횟수
-  사용자 표현: PE Cycle, PE 사이클, PE, 쓰기 횟수
+  의미: UFS Block을 쓰고 지운 횟수
+  사용자 표현: PE Cycle, PE 사이클, PE, 쓰고 지운 횟수
 
-- unstable_count
-  의미: NAND의 불안정 발생 횟수
-  사용자 표현: 불안정 횟수, 불안정 발생, unstable
+- tbr
+  의미: Total Byte Read, UFS의 누적 읽기량
+  사용자 표현: 총 읽기량, TBR, 누적 읽기 바이트, 읽은 용량
 
-- model
-  의미: NAND 모델명
-  사용자 표현: 모델, 제품 모델
+- reserved_b
+  의미: UFS의 Reserved Block 개수
+  사용자 표현: 예비 블록, Reserved Block, 리저브 블록
 
-- capacity_gb
-  의미: NAND 용량(GB)
-  사용자 표현: 용량, 저장 용량, GB
+- spocount
+  의미: Sudden Power Off Count, 갑자기 Memory Power가 끊긴 횟수
+  사용자 표현: 전원 급차단, SPO, Sudden Power Off, 갑작스러운 전원 차단 횟수
 
-- temperature_c
-  의미: NAND 온도(섭씨)
-  사용자 표현: 온도, 발열, 섭씨, 뜨거운 정도
+- read_reclaim
+  의미: Read Refresh(Read Reclaim)를 수행한 횟수
+  사용자 표현: 리드 리클레임, Read Reclaim, 리드 리프레시 횟수
 
-- error_count
-  의미: NAND에서 발생한 오류 횟수
-  사용자 표현: 오류, 에러, 오류 횟수, 에러 횟수
+- init_count
+  의미: 초기화 횟수 (상세 정의 없음)
+  사용자 표현: 초기화 횟수, Init Count
 
-- usage_hours
-  의미: NAND 사용 시간
-  사용자 표현: 사용 시간, 사용 기간
+- vcc_count
+  의미: VCC Power가 Spec 이하로 떨어진 횟수
+  사용자 표현: VCC 전압 이상 횟수, VCC Power 저하 횟수, VCC 카운트
+
+- vccq_count
+  의미: VCCQ Power가 Spec 이하로 떨어진 횟수
+  사용자 표현: VCCQ 전압 이상 횟수, VCCQ Power 저하 횟수, VCCQ 카운트
+
+- ffu_count
+  의미: Firmware Update 횟수
+  사용자 표현: 펌웨어 업데이트 횟수, FFU, Firmware Update 횟수
+
+- bedccount
+  의미: bEDCCount (상세 정의 없음)
+  사용자 표현: bEDCCount, EDC 카운트
+
+- bchecksumcount
+  의미: bChecksumCount (상세 정의 없음)
+  사용자 표현: bChecksumCount, 체크섬 카운트
+
+- bundefinstcount
+  의미: bUndefINSTCount (상세 정의 없음)
+  사용자 표현: bUndefINSTCount, 정의되지 않은 명령 카운트
 """
 
 
@@ -512,42 +582,40 @@ question = st.chat_input(
 # 최근 업로드 Parquet 자동 연결
 # =====================================
 
-if os.path.exists(
-    "upload_info.json"
-):
+if data_mode == "🚀 대용량 Parquet 파일 사용":
 
-    import json
+    try:
 
-
-    with open(
-        "upload_info.json",
-        "r",
-        encoding="utf-8"
-    ) as info_file:
-
-        upload_info = json.load(
-            info_file
+        latest_response = requests.get(
+            "http://127.0.0.1:8000/upload/latest",
+            timeout=3
         )
 
+        latest_response.raise_for_status()
 
-    final_file_path = upload_info[
-        "file_path"
-    ]
+        upload_info = latest_response.json()
 
+        final_file_path = upload_info[
+            "file_path"
+        ]
 
-    if os.path.exists(
-        final_file_path
-    ):
+        if os.path.exists(
+            final_file_path
+        ):
 
-        con.execute(
-            f"""
-            CREATE OR REPLACE VIEW nand_health AS
-            SELECT *
-            FROM read_parquet(
-                '{final_file_path}'
+            con.execute(
+                f"""
+                CREATE OR REPLACE VIEW nand_health AS
+                SELECT *
+                FROM read_parquet(
+                    '{final_file_path}'
+                )
+                """
             )
-            """
-        )
+
+    except requests.exceptions.RequestException:
+
+        pass
 if question:
 
     st.chat_message("user").write(question)
@@ -591,14 +659,27 @@ nand_health
 
 사용 가능한 실제 컬럼:
 
-unit_id
-model
+vednor
+density
+pn
+storage_used_already
+storage_utilization
+ufsid
+rtbb
+uecc
+tbw
 pe_cycle
-temperature_c
-error_count
-unstable_count
-capacity_gb
-usage_hours
+tbr
+reserved_b
+spocount
+read_reclaim
+init_count
+vcc_count
+vccq_count
+ffu_count
+bedccount
+bchecksumcount
+bundefinstcount
 
 ==================================================
 3. 컬럼 의미 매핑 규칙
@@ -607,88 +688,152 @@ usage_hours
 사용자의 표현이 아래 목록에 포함되면
 반드시 해당 컬럼을 사용한다.
 
-[오류 관련]
+[회사/제품 식별 관련]
+"회사"
+"제조사"
+"벤더"
+"브랜드"
+→ vednor
+
+"제품 번호"
+"Part No"
+"품번"
+"모델명"
+→ pn
+
+"고유 ID"
+"UFS ID"
+"장치 ID"
+"시리얼"
+"식별자"
+→ ufsid
+
+[용량 관련]
+"총 용량"
+"메모리 용량"
+"저장 용량 스펙"
+→ density
+
+"사용 용량"
+"사용한 용량"
+"사용 중인 용량"
+"사용량"
+→ storage_used_already
+
+"사용률"
+"사용 비율"
+"용량 대비 사용률"
+→ storage_utilization
+
+[불량/오류 관련]
+"불량 블록"
+"런타임 불량 블록"
+"Bad Block"
+→ rtbb
+
+"비트 에러"
+"비트 오류"
+"정정 안 된 에러"
+"UECC"
 "오류"
 "에러"
-"오류 수치"
-"에러 수치"
-"오류 개수"
-"에러 개수"
-"오류 횟수"
-"에러 횟수"
-→ error_count
+→ uecc
 
-[불안정 관련]
-"불안정"
-"불안정 횟수"
-"불안정 발생"
-"unstable"
-→ unstable_count
+[쓰기/읽기 관련]
+"총 쓰기량"
+"TBW"
+"누적 쓰기 바이트"
+→ tbw
 
-[온도 관련]
-"온도"
-"발열"
-"뜨거운 정도"
-"섭씨 온도"
-"섭씨"
-→ temperature_c
+"총 읽기량"
+"TBR"
+"누적 읽기 바이트"
+"읽은 용량"
+→ tbr
 
-[PE Cycle 관련]
 "PE"
 "PE Cycle"
 "PE 사이클"
-"쓰기 횟수"
+"쓰고 지운 횟수"
 → pe_cycle
 
-[사용 시간 관련]
-"사용 시간"
-"사용 기간"
-→ usage_hours
+[전원/전압 관련]
+"전원 급차단"
+"SPO"
+"Sudden Power Off"
+→ spocount
 
-[용량 관련]
-"용량"
-"저장 용량"
-"GB"
-→ capacity_gb
+"VCC 전압 이상"
+"VCC Power 저하"
+→ vcc_count
 
-[모델 관련]
-"모델"
-"제품 모델"
-→ model
+"VCCQ 전압 이상"
+"VCCQ Power 저하"
+→ vccq_count
 
-[유닛 관련]
-"유닛"
-"NAND"
-"장치"
-"제품 번호"
-→ unit_id
+[기타 카운트 관련]
+"예비 블록"
+"Reserved Block"
+→ reserved_b
+
+"리드 리클레임"
+"Read Reclaim"
+"리드 리프레시"
+→ read_reclaim
+
+"초기화 횟수"
+"Init Count"
+→ init_count
+
+"펌웨어 업데이트"
+"FFU"
+"Firmware Update"
+→ ffu_count
+
+"bEDCCount"
+"EDC 카운트"
+→ bedccount
+
+"bChecksumCount"
+"체크섬 카운트"
+→ bchecksumcount
+
+"bUndefINSTCount"
+"정의되지 않은 명령 카운트"
+→ bundefinstcount
 
 ==================================================
 4. 절대 혼동하면 안 되는 컬럼
 ==================================================
 
-오류와 불안정은 서로 다른 개념이다.
+불량 블록과 비트 에러는 서로 다른 개념이다.
 
-"오류", "에러"
-→ error_count
+"불량 블록", "Bad Block"
+→ rtbb
 
-"불안정", "unstable"
-→ unstable_count
+"비트 에러", "UECC"
+→ uecc
 
 절대 다음과 같이 해석하지 않는다.
 
-오류 → unstable_count ❌
-불안정 → error_count ❌
+불량 블록 → uecc ❌
+비트 에러 → rtbb ❌
 
-온도와 오류도 서로 다른 개념이다.
+쓰기량과 읽기량도 서로 다른 개념이다.
 
-온도 → temperature_c
-오류 → error_count
+쓰기량 → tbw
+읽기량 → tbr
 
-사용 시간과 PE Cycle도 서로 다른 개념이다.
+총 용량, 사용 용량, 사용률도 서로 다른 개념이다.
 
-사용 시간 → usage_hours
-PE Cycle → pe_cycle
+총 용량 → density
+사용 용량 → storage_used_already
+사용률 → storage_utilization
+
+VCC와 VCCQ도 서로 다른 전원 레일이다.
+
+VCC 관련 → vcc_count
+VCCQ 관련 → vccq_count
 
 ==================================================
 5. 질문에 명시된 조건만 사용
@@ -700,20 +845,20 @@ PE Cycle → pe_cycle
 예를 들어:
 
 사용자:
-"온도가 70도보다 높은 NAND는 몇 개야?"
+"불량 블록이 70개보다 많은 UFS는 몇 개야?"
 
 올바른 SQL:
 SELECT COUNT(*)
 FROM nand_health
-WHERE temperature_c > 70;
+WHERE rtbb > 70;
 
 잘못된 SQL:
 SELECT COUNT(*)
 FROM nand_health
-WHERE temperature_c > 70
-AND error_count > 10;
+WHERE rtbb > 70
+AND uecc > 10;
 
-오류 조건은 사용자가 말하지 않았으므로 추가하면 안 된다.
+비트 에러 조건은 사용자가 말하지 않았으므로 추가하면 안 된다.
 
 ==================================================
 6. 모호한 상태·고장·품질 표현 처리 규칙
@@ -760,17 +905,18 @@ AND error_count > 10;
 위와 같은 표현만 있고 구체적인 수치 기준이나
 명시적인 컬럼 조건이 없는 경우:
 
-1. temperature_c를 임의로 선택하지 않는다.
-2. error_count를 임의로 선택하지 않는다.
-3. unstable_count를 임의로 선택하지 않는다.
-4. pe_cycle을 임의로 선택하지 않는다.
-5. usage_hours를 임의로 선택하지 않는다.
-6. 여러 컬럼을 임의로 조합하지 않는다.
-7. error_count > 0 조건을 임의로 추가하지 않는다.
-8. unstable_count > 0 조건을 임의로 추가하지 않는다.
-9. temperature_c > 특정 값 조건을 임의로 추가하지 않는다.
-10. pe_cycle > 특정 값 조건을 임의로 추가하지 않는다.
-11. usage_hours > 특정 값 조건을 임의로 추가하지 않는다.
+1. rtbb를 임의로 선택하지 않는다.
+2. uecc를 임의로 선택하지 않는다.
+3. pe_cycle을 임의로 선택하지 않는다.
+4. tbw, tbr을 임의로 선택하지 않는다.
+5. spocount를 임의로 선택하지 않는다.
+6. vcc_count, vccq_count를 임의로 선택하지 않는다.
+7. storage_utilization을 임의로 선택하지 않는다.
+8. 여러 컬럼을 임의로 조합하지 않는다.
+9. rtbb > 0 조건을 임의로 추가하지 않는다.
+10. uecc > 0 조건을 임의로 추가하지 않는다.
+11. pe_cycle > 특정 값 조건을 임의로 추가하지 않는다.
+12. storage_utilization > 특정 값 조건을 임의로 추가하지 않는다.
 
 구체적인 기준이 없는 모호한 질문은
 반드시 다음 SQL을 출력한다.
@@ -797,37 +943,37 @@ SELECT '질문의 기준이 명확하지 않습니다.' AS message;
 예시 2:
 
 사용자 질문:
-"오류가 10개 이상이고 불안정 횟수가 5회 이상인
-고장 위험 NAND는 몇 개야?"
+"비트 에러가 10개 이상이고 불량 블록이 5개 이상인
+고장 위험 UFS는 몇 개야?"
 
 → 명시된 조건만 사용:
 
-error_count >= 10
-AND unstable_count >= 5
+uecc >= 10
+AND rtbb >= 5
 
 예상 SQL:
 
 SELECT COUNT(*)
 FROM nand_health
-WHERE error_count >= 10
-AND unstable_count >= 5;
+WHERE uecc >= 10
+AND rtbb >= 5;
 
 예시 3:
 
 사용자 질문:
-"온도가 70도 이상인 NAND를 고장 위험으로 보고
+"사용률이 90% 이상인 UFS를 고장 위험으로 보고
 몇 개야?"
 
-→ 사용자가 온도 기준을 직접 제시했으므로:
+→ 사용자가 사용률 기준을 직접 제시했으므로:
 
 SELECT COUNT(*)
 FROM nand_health
-WHERE temperature_c >= 70;
+WHERE storage_utilization >= 0.9;
 
 예시 4:
 
 사용자 질문:
-"PE Cycle이 1000 이상인 오래된 NAND는 몇 개야?"
+"PE Cycle이 1000 이상인 오래된 UFS는 몇 개야?"
 
 → PE Cycle 기준만 사용:
 
@@ -838,13 +984,13 @@ WHERE pe_cycle >= 1000;
 예시 5:
 
 사용자 질문:
-"사용 시간이 10000시간 이상인 NAND는 몇 개야?"
+"전원 급차단이 10회 이상인 UFS는 몇 개야?"
 
-→ 사용 시간 기준만 사용:
+→ 전원 급차단 기준만 사용:
 
 SELECT COUNT(*)
 FROM nand_health
-WHERE usage_hours >= 10000;
+WHERE spocount >= 10;
 
 ==================================================
 모호한 표현과 구체적 조건의 우선순위
@@ -858,36 +1004,36 @@ WHERE usage_hours >= 10000;
 
 예:
 
-"고장날 것 같은 NAND 중에서 온도가 70도 이상인 것은 몇 개야?"
+"고장날 것 같은 UFS 중에서 불량 블록이 70개 이상인 것은 몇 개야?"
 
 → "고장날 것 같다"는 모호한 표현이므로 무시한다.
-→ 명시된 온도 조건만 사용한다.
+→ 명시된 불량 블록 조건만 사용한다.
 
 SELECT COUNT(*)
 FROM nand_health
-WHERE temperature_c >= 70;
+WHERE rtbb >= 70;
 
 예:
 
-"문제가 있는 NAND 중 오류가 10개 이상인 것은 몇 개야?"
+"문제가 있는 UFS 중 비트 에러가 10개 이상인 것은 몇 개야?"
 
-→ "문제가 있는 NAND"는 모호한 표현이므로 무시한다.
-→ 명시된 오류 조건만 사용한다.
+→ "문제가 있는 UFS"는 모호한 표현이므로 무시한다.
+→ 명시된 비트 에러 조건만 사용한다.
 
 SELECT COUNT(*)
 FROM nand_health
-WHERE error_count >= 10;
+WHERE uecc >= 10;
 
 예:
 
-"건강한 NAND 중 사용 시간이 1000시간 이하인 것은 몇 개야?"
+"건강한 UFS 중 사용률이 50% 이하인 것은 몇 개야?"
 
-→ "건강한 NAND"는 모호한 표현이므로 무시한다.
-→ 명시된 사용 시간 조건만 사용한다.
+→ "건강한 UFS"는 모호한 표현이므로 무시한다.
+→ 명시된 사용률 조건만 사용한다.
 
 SELECT COUNT(*)
 FROM nand_health
-WHERE usage_hours <= 1000;
+WHERE storage_utilization <= 0.5;
 
 ==================================================
 7. 집계 규칙
@@ -917,56 +1063,59 @@ WHERE usage_hours <= 1000;
 
 예:
 
-"온도의 평균"
-→ AVG(temperature_c)
+"비트 에러의 평균"
+→ AVG(uecc)
 
-"오류 개수의 합계"
-→ SUM(error_count)
+"불량 블록의 합계"
+→ SUM(rtbb)
 
 "가장 높은 PE Cycle"
 → MAX(pe_cycle)
 
 ==================================================
-8. NAND 개수와 오류 합계를 구분
+8. UFS 개수와 수치 합계를 구분
 ==================================================
 
-사용자가 NAND 또는 유닛의 개수를 물으면
+사용자가 UFS 또는 장치의 개수를 물으면
 COUNT(*)를 사용한다.
 
 예:
 
-"온도가 70도 이상인 NAND는 몇 개야?"
+"불량 블록이 70개 이상인 UFS는 몇 개야?"
 → COUNT(*)
 
 반면:
 
-"오류의 총합은?"
-→ SUM(error_count)
+"비트 에러의 총합은?"
+→ SUM(uecc)
 
-"오류가 발생한 NAND는 몇 개야?"
+"비트 에러가 발생한 UFS는 몇 개야?"
 → COUNT(*)
-WHERE error_count > 0
+WHERE uecc > 0
 
 ==================================================
 9. 그룹별 분석
 ==================================================
 
-사용자가 "모델별", "모델마다"라고 하면
-GROUP BY model을 사용한다.
+사용자가 "회사별", "제조사별", "벤더별"이라고 하면
+GROUP BY vednor를 사용한다.
+
+사용자가 "제품별", "품번별"이라고 하면
+GROUP BY pn을 사용한다.
 
 예:
 
-"모델별 NAND 개수"
+"회사별 UFS 개수"
 →
-SELECT model, COUNT(*) AS unit_count
+SELECT vednor, COUNT(*) AS unit_count
 FROM nand_health
-GROUP BY model;
+GROUP BY vednor;
 
-"모델별 평균 온도"
+"회사별 평균 비트 에러"
 →
-SELECT model, AVG(temperature_c) AS avg_temperature
+SELECT vednor, AVG(uecc) AS avg_uecc
 FROM nand_health
-GROUP BY model;
+GROUP BY vednor;
 
 ==================================================
 10. 순위 표현
@@ -988,10 +1137,10 @@ GROUP BY model;
 
 예:
 
-"모델별 오류가 가장 많은 순서"
+"회사별 불량 블록이 가장 많은 순서"
 →
-GROUP BY model
-ORDER BY error_count DESC
+GROUP BY vednor
+ORDER BY rtbb DESC
 
 ==================================================
 11. 조건 표현
@@ -1025,10 +1174,10 @@ ORDER BY error_count DESC
 
 예:
 
-"온도가 70도 이상이고 오류가 10개 초과"
+"불량 블록이 70개 이상이고 비트 에러가 10개 초과"
 →
-temperature_c >= 70
-AND error_count > 10
+rtbb >= 70
+AND uecc > 10
 
 ==================================================
 12. SQL 작성 규칙
@@ -1057,11 +1206,12 @@ SQL을 출력하기 전에 반드시 다음을 확인한다.
 - 모든 컬럼이 schema에 존재하는가?
 
 [의미 점검]
-- 오류를 error_count로 매핑했는가?
-- 불안정을 unstable_count로 매핑했는가?
-- 온도를 temperature_c로 매핑했는가?
+- 불량 블록을 rtbb로 매핑했는가?
+- 비트 에러/오류를 uecc로 매핑했는가?
 - PE Cycle을 pe_cycle로 매핑했는가?
-- 사용 시간을 usage_hours로 매핑했는가?
+- 전원 급차단을 spocount로 매핑했는가?
+- 사용률을 storage_utilization으로 매핑했는가?
+- 총 용량/사용 용량을 density/storage_used_already로 정확히 구분했는가?
 
 [조건 점검]
 - 사용자가 말하지 않은 조건을 추가하지 않았는가?
@@ -1089,20 +1239,20 @@ SQL:
 """
 
         response = client.chat.completions.create(
-               model="gpt-4o-mini",
-              messages=[
-                 {
-                      "role": "system",
-                       "content": "너는 정확한 SQL을 생성하는 데이터 분석 전문가다."
-                   },
-                 {
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "너는 정확한 SQL을 생성하는 데이터 분석 전문가다."
+                },
+                {
                     "role": "user",
                     "content": prompt
                 }
             ],
             temperature=0
         )
-    
+
         sql = response.choices[0].message.content.strip()
     
         sql = sql.replace("```sql", "")
@@ -1179,23 +1329,23 @@ SQL:
     
     
         summary_response = client.chat.completions.create(
-    
+
             model="gpt-4o-mini",
-    
+
             messages=[
-    
+
                 {
                     "role": "user",
                     "content": summary_prompt
                 }
-    
+
             ],
-    
+
             temperature=0
-    
+
         )
-    
-    
+
+
         summary = (
             summary_response
             .choices[0]

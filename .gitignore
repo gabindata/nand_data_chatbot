@@ -11,3 +11,6 @@ converted_parquet/
 nand_health_parquet/
 nand_health_100mb.csv
 nand_health_300mb.xlsx
+upload_info.json
+uploaded_nand_health.csv
+uploaded_nand_health.parquet
