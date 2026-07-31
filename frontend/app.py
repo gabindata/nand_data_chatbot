@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,7 @@ from typing import Any
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import streamlit.components.v1 as components
 from PIL import Image
 
 
@@ -19,7 +21,7 @@ BACKGROUND_PATH = BASE_DIR / "assets" / "sunny_bg.png"
 AVATAR_PATH = BASE_DIR / "assets" / "sunny_avatar.png"
 
 st.set_page_config(
-    page_title="SUNNY 9조 데이터 챗봇",
+    page_title="SUNI 9조 데이터 챗봇",
     page_icon="☀️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -70,24 +72,60 @@ st.markdown(
 
     [data-testid="stAppViewContainer"] {{
         background: transparent;
+        height: 100vh;
+        overflow: hidden;
     }}
 
+    /* stMain을 세로 flex 컨테이너로 만들어, 결과 영역(.block-container)과
+       채팅 입력창(stBottom 계열)이 서로 다른 두 개의 flex 아이템이 되도록 한다.
+       이렇게 하면 입력창은 항상 화면 맨 아래에 "고정"되고, 결과 영역만 그
+       위에서 독립적으로 스크롤되어 입력창이 결과를 가리는 문제가 근본적으로
+       사라진다. (Claude 채팅 UI와 동일한 레이아웃 방식) */
     [data-testid="stMain"] {{
         background: transparent;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }}
+
+    [data-testid="stMain"] > div {{
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
     }}
 
     .block-container {{
         max-width: 980px;
-        min-height: calc(100vh - 48px);
-        margin-top: 18px;
-        margin-bottom: 22px;
-        padding: 1.6rem 2.25rem 7.8rem 2.25rem;
+        width: 100%;
+        margin: 18px auto 0 auto;
+        padding: 1.6rem 2.25rem 1.6rem 2.25rem;
         border: 1px solid var(--border);
         border-radius: 28px;
         background: rgba(255, 255, 255, 0.78);
         backdrop-filter: blur(22px);
         -webkit-backdrop-filter: blur(22px);
         box-shadow: 0 24px 70px rgba(27, 91, 123, 0.20);
+        /* flex 아이템으로서 남는 공간을 모두 차지하고, 내부에서만 스크롤 */
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+    }}
+
+    /* 채팅 입력창을 감싸는 컨테이너는 flex의 두 번째 아이템으로 두어
+       block-container 아래, 화면 맨 밑에 항상 자리잡게 한다. Streamlit
+       버전에 따라 data-testid가 다를 수 있어 두 가지를 모두 지정한다. */
+    [data-testid="stBottom"],
+    [data-testid="stBottomBlockContainer"] {{
+        position: relative !important;
+        flex: 0 0 auto;
+        width: 100%;
+        max-width: 980px;
+        margin: 0 auto;
+        z-index: 5;
+        background: transparent;
     }}
 
     [data-testid="stSidebar"] {{
@@ -233,12 +271,58 @@ st.markdown(
     }}
 
     [data-testid="stChatInput"] {{
-        border-radius: 22px;
+        border-radius: 26px;
         background: rgba(255, 255, 255, 0.96);
-        border: 1px solid rgba(139, 190, 213, 0.55);
+        border: 1.5px solid rgba(150, 160, 168, 0.55);
         box-shadow: 0 14px 38px rgba(26, 86, 115, 0.18);
         backdrop-filter: blur(16px);
         -webkit-backdrop-filter: blur(16px);
+        transition: border-color 0.15s ease;
+    }}
+
+    /* 내부 요소(텍스트 영역 등)도 같은 곡률을 갖도록 강제해,
+       클릭 시 빨간 스트로크가 바깥 테두리와 동일한 라운드를 유지하게 한다. */
+    [data-testid="stChatInput"] > div,
+    [data-testid="stChatInput"] textarea {{
+        border-radius: 26px !important;
+    }}
+
+    /* 둥근 모서리(pill 형태) 곡선에 커서가 걸려 가려지는 것을 막기 위해
+       텍스트 시작 위치를 안쪽으로 밀어준다 (스페이스 한 칸 누른 효과). */
+    [data-testid="stChatInput"] textarea {{
+        padding-left: 14px !important;
+    }}
+
+    [data-testid="stChatInput"]:focus-within {{
+        border-color: var(--sunny-red) !important;
+    }}
+
+    /* 어시스턴트 답변 요약 텍스트를 담는 박스. 블러 없이 단색 배경 +
+       회색 테두리로 눈에 띄게 감싼다. */
+    .answer-summary {{
+        margin: 10px 0 4px 0;
+        padding: 14px 16px;
+        border: 1px solid #c7d4da;
+        border-radius: 14px;
+        background: #f2f9fb;
+        color: #26495b;
+        font-size: 14.5px;
+        line-height: 1.75;
+    }}
+
+    .answer-summary .stat-highlight {{
+        color: var(--sunny-red-dark);
+        font-weight: 800;
+    }}
+
+    /* 탭 콘텐츠(핵심 결과 / 데이터 표 / 시각화) 영역을 단색 테두리로 강조.
+       블러 없이 깔끔한 단색 배경 + 테두리만 사용한다. */
+    [data-testid="stTabs"] [role="tabpanel"] {{
+        margin-top: 10px;
+        padding: 16px 18px;
+        border: 1px solid #c7d4da;
+        border-radius: 14px;
+        background: #ffffff;
     }}
 
     [data-testid="stStatusWidget"] {{
@@ -285,9 +369,8 @@ st.markdown(
     @media (max-width: 768px) {{
         .block-container {{
             margin: 0;
-            padding: 1.1rem 1rem 7.4rem 1rem;
+            padding: 1.1rem 1rem 1.1rem 1rem;
             border-radius: 0;
-            min-height: 100vh;
         }}
 
         .hero-title {{
@@ -297,6 +380,57 @@ st.markdown(
     </style>
     """,
     unsafe_allow_html=True,
+)
+
+
+# ---------------------------------------------------------
+# 결과 영역 자동 스크롤
+# 입력창은 이제 CSS(flex 레이아웃)만으로 항상 화면 맨 아래에 고정되고,
+# 결과 영역(.block-container)은 그 위에서 독립적으로 스크롤된다.
+# 새 메시지가 추가될 때마다 결과 영역을 맨 아래로 자동 스크롤해서
+# 사용자가 매번 손으로 내리지 않아도 최신 답변이 입력창 바로 위에 보이게 한다.
+# 물론 사용자는 언제든 위로 스크롤해서 이전 결과를 자유롭게 볼 수 있다.
+# ---------------------------------------------------------
+components.html(
+    """
+    <script>
+    (function () {
+        const doc = window.parent.document;
+
+        function findScrollArea() {
+            return doc.querySelector('.block-container');
+        }
+
+        function scrollToBottom() {
+            const el = findScrollArea();
+            if (!el) return;
+            el.scrollTop = el.scrollHeight;
+        }
+
+        function attach() {
+            const el = findScrollArea();
+            if (!el) {
+                setTimeout(attach, 200);
+                return;
+            }
+
+            // 최초 렌더링 및 스트림릿 재실행(rerun) 직후 맨 아래로 스크롤
+            scrollToBottom();
+
+            // 새 메시지/차트/표 등이 추가되어 콘텐츠 높이가 바뀔 때마다
+            // 다시 맨 아래로 스크롤한다.
+            const resizeObserver = new ResizeObserver(scrollToBottom);
+            resizeObserver.observe(el);
+
+            const mutationObserver = new MutationObserver(scrollToBottom);
+            mutationObserver.observe(el, { childList: true, subtree: true });
+        }
+
+        attach();
+    })();
+    </script>
+    """,
+    height=0,
 )
 
 
@@ -327,8 +461,8 @@ with st.sidebar:
     with col_name:
         st.markdown(
             """
-            <p class="brand-kicker">SUNNY 9 TEAM</p>
-            <p class="brand-title">써니 9조</p>
+            <p class="brand-kicker">SUNI 9 TEAM</p>
+            <p class="brand-title"SUNI 9조</p>
             <p class="brand-subtitle">품질 데이터 분석 챗봇</p>
             """,
             unsafe_allow_html=True,
@@ -482,8 +616,26 @@ def render_chart(df: pd.DataFrame, chart: dict[str, str]) -> None:
     )
 
 
+_NUMBER_PATTERN = re.compile(
+    r"(\d[\d,]*(?:\.\d+)?)(건|%|원|개|명|위|년|월|일|배)?"
+)
+
+
+def highlight_numbers(text: str) -> str:
+    """텍스트 내 숫자(및 붙은 단위)를 <span>으로 감싸 강조 표시한다."""
+
+    def _wrap(match: re.Match) -> str:
+        number, unit = match.group(1), match.group(2) or ""
+        return f'<span class="stat-highlight">{number}{unit}</span>'
+
+    return _NUMBER_PATTERN.sub(_wrap, text)
+
+
 def render_assistant_message(message: dict[str, Any]) -> None:
-    st.markdown(message["content"])
+    st.markdown(
+        f'<div class="answer-summary">{highlight_numbers(message["content"])}</div>',
+        unsafe_allow_html=True,
+    )
 
     data = message.get("data")
     if data:
@@ -544,7 +696,7 @@ st.markdown(
     """
     <section class="hero">
         <div class="hero-badge">● CSV 데이터 연결 완료</div>
-        <h1 class="hero-title">SUNNY 데이터 챗봇</h1>
+        <h1 class="hero-title">SUNI 데이터 챗봇</h1>
         <p class="hero-description">
             품질 데이터를 자연어로 검색하고, 조회 결과를 표와 그래프로 확인하세요.
         </p>
@@ -594,7 +746,6 @@ for message in st.session_state.messages:
             render_assistant_message(message)
         else:
             st.markdown(message["content"])
-
 
 typed_prompt = st.chat_input("품질 데이터에 대해 질문해 주세요.")
 prompt = st.session_state.pending_prompt or typed_prompt
