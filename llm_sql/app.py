@@ -1,18 +1,44 @@
-import streamlit as st
+"""
+NAND Health 챗봇의 AI+SQL 로직 모듈.
+
+주의: 이 파일은 더 이상 자체 Streamlit 페이지가 아니다 (st.set_page_config,
+st.title, 데이터 입력 모드 선택 UI, 채팅 렌더링을 모두 제거했다).
+화면(UI)은 frontend/app.py가 담당하고, 이 모듈은 아래 함수들만 제공한다.
+
+frontend/README.md 에 정의된 통합 방식대로,
+frontend/app.py 의 create_demo_result(question) 자리에
+이 모듈의 answer_question(con, question)을 호출하도록 바꾸면
+실제 데이터로 연결된다.
+
+제공 함수:
+- get_duckdb_connection(): DuckDB 커넥션 생성
+- load_csv_into_duckdb(con, csv_file): 업로드된 CSV를 nand_health 뷰로 등록
+- connect_latest_parquet(con, upload_server_url): backend 서버에 최근 업로드된
+  parquet을 nand_health 뷰로 연결
+- upload_file_in_chunks(file_path, upload_server_url): 대용량 파일을
+  backend/upload_server.py 로 청크 업로드 (진행률 표시 포함)
+- answer_question(con, question): 자연어 질문 1개를 SQL 생성 -> 검증 -> 실행 ->
+  요약까지 수행하고 결과 dict를 반환
+"""
+
 import polars as pl
 import duckdb
 import os
 import requests
 import re
+from dotenv import load_dotenv
+from anthropic import Anthropic
+import streamlit as st  # upload_file_in_chunks의 진행률 표시(st.progress 등) 용도로만 사용
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# 프로젝트 최상위 폴더(nand_data_chatbot/.env)에 적어둔 환경변수(ANTHROPIC_API_KEY)를
+# 실행 위치(cwd)와 상관없이 항상 불러오도록 경로를 명시한다.
+load_dotenv(os.path.join(BASE_DIR, "..", ".env"))
+
 LARGE_UPLOAD_HTML_PATH = os.path.join(
     BASE_DIR, "..", "backend", "large_upload.html"
 )
-
-# =====================================
-# SQL 검증 설정
-# =====================================
 
 # =====================================
 # SQL 검증 설정
@@ -131,11 +157,81 @@ def validate_sql(sql: str):
 
     return True, ""
 
-from openai import OpenAI
 
 # =====================================
-# 청크 업로드 함수
+# Claude(Anthropic) API 설정
 # =====================================
+
+api_key = os.environ.get("ANTHROPIC_API_KEY")
+
+if not api_key:
+    raise RuntimeError(
+        "ANTHROPIC_API_KEY가 설정되지 않았습니다. "
+        "프로젝트 최상위 폴더의 .env 파일에 키를 넣어주세요."
+    )
+
+client = Anthropic(api_key=api_key)
+
+# SQL 생성/요약에 사용할 모델 (구매한 플랜 기준 Claude Sonnet 5)
+# 참고: Anthropic API는 model을 반드시 명시해야 하며 기본값이 없다.
+CLAUDE_MODEL = "claude-sonnet-5"
+
+
+# =====================================
+# 데이터 연결 기능
+# =====================================
+
+def get_duckdb_connection():
+    """이 모듈 전용 DuckDB 커넥션을 새로 만든다."""
+    return duckdb.connect()
+
+
+def load_csv_into_duckdb(con, csv_file) -> int:
+    """
+    업로드된 CSV(파일 객체 또는 경로)를 nand_health 뷰로 등록한다.
+    반환값은 로드된 행(row) 수.
+    """
+    data = pl.read_csv(csv_file)
+
+    con.register("uploaded_data", data)
+
+    con.execute("""
+        CREATE OR REPLACE VIEW nand_health AS
+        SELECT *
+        FROM uploaded_data
+    """)
+
+    return data.height
+
+
+def connect_latest_parquet(con, upload_server_url: str = "http://127.0.0.1:8000") -> str:
+    """
+    backend/upload_server.py 에 최근 업로드된 parquet 파일을
+    nand_health 뷰로 연결한다. 연결한 parquet 파일 경로를 반환한다.
+    """
+    response = requests.get(
+        f"{upload_server_url}/upload/latest",
+        timeout=3
+    )
+
+    response.raise_for_status()
+
+    upload_info = response.json()
+
+    final_file_path = upload_info["file_path"]
+
+    con.execute(
+        f"""
+        CREATE OR REPLACE VIEW nand_health AS
+        SELECT *
+        FROM read_parquet(
+            '{final_file_path}'
+        )
+        """
+    )
+
+    return final_file_path
+
 
 def upload_file_in_chunks(
     file_path,
@@ -248,233 +344,10 @@ def upload_file_in_chunks(
 
 
     return result["file_path"]
-st.set_page_config(
-    page_title="NAND Health Chatbot",
-    page_icon="💾"
-)
-
-st.title("💾 NAND Health Data Chatbot")
 
 
 # =====================================
-# 데이터 입력 방식 선택
-# =====================================
-
-data_mode = st.radio(
-    "데이터 입력 방식을 선택하세요",
-    [
-        "📁 파일 업로드",
-        "🚀 대용량 Parquet 파일 사용"
-    ]
-)
-
-
-# =====================================
-# DuckDB 연결
-# =====================================
-
-@st.cache_resource
-def get_duckdb_connection():
-
-    return duckdb.connect()
-con = get_duckdb_connection()
-
-
-
-
-# =====================================
-# 1. 일반 파일 업로드
-# =====================================
-
-if data_mode == "📁 파일 업로드":
-
-    uploaded_file = st.file_uploader(
-        "📁 NAND Health csv 파일을 업로드하세요",
-        type=["csv"]
-    )
-
-    if uploaded_file is not None:
-
-        with st.spinner("파일을 읽는 중..."):
-
-            file_name = uploaded_file.name
-
-            # CSV
-            if file_name.endswith(".csv"):
-
-                data = pl.read_csv(uploaded_file)
-
-            
-            # DuckDB에 등록
-            con.register("uploaded_data", data)
-
-            con.execute("""
-                CREATE OR REPLACE VIEW nand_health AS
-                SELECT *
-                FROM uploaded_data
-            """)
-
-        st.success("데이터 업로드 완료!")
-        st.write(f"총 {data.height:,}개의 데이터가 있습니다.")
-
-        with st.expander("📊 데이터 미리보기"):
-
-            preview = con.execute(
-                "SELECT * FROM nand_health LIMIT 100"
-            ).pl()
-
-            st.dataframe(preview)
-
-# =====================================
-# 2. 대용량 파일 브라우저 업로드
-# =====================================
-
-else:
-
-    st.subheader(
-        "🚀 대용량 파일 청크 업로드"
-    )
-
-    # HTML 파일 읽기
-    with open(
-        LARGE_UPLOAD_HTML_PATH,
-        "r",
-        encoding="utf-8"
-    ) as file:
-
-        html_code = file.read()
-
-
-    # Streamlit 화면에 HTML 업로더 표시
-    st.components.v1.html(
-        html_code,
-        height=500,
-        scrolling=True
-    )
-
-
-    st.divider()
-
-
-    st.subheader(
-        "📂 업로드된 파일 연결"
-    )
-
-
-    if st.button(
-        "🔄 최근 업로드 파일 가져오기"
-    ):
-
-        try:
-
-            response = requests.get(
-                "http://127.0.0.1:8000/upload/latest"
-            )
-
-
-            response.raise_for_status()
-
-
-            upload_info = response.json()
-
-
-            final_file_path = upload_info[
-                "file_path"
-            ]
-
-
-            st.success(
-                "최근 업로드 파일을 찾았습니다!"
-            )
-
-
-            st.write(
-                f"파일명: {upload_info['filename']}"
-            )
-
-
-            st.write(
-                f"파일 경로: {final_file_path}"
-            )
-
-
-            # =====================================
-            # Parquet 데이터 연결
-            # =====================================
-
-            con.execute(
-                f"""
-                CREATE OR REPLACE VIEW nand_health AS
-                SELECT *
-                FROM read_parquet(
-                    '{final_file_path}'
-                )
-                """
-            )
-
-
-            st.success(
-                "✅ 자동 생성된 Parquet를 DuckDB에 연결했습니다!"
-            )
-
-
-            count_result = con.execute(
-                "SELECT COUNT(*) FROM nand_health"
-            ).fetchone()[0]
-
-
-            st.write(
-                f"총 {count_result:,}개의 데이터가 있습니다."
-            )
-
-
-            with st.expander(
-                "📊 데이터 미리보기"
-            ):
-
-                preview = con.execute(
-                    "SELECT * FROM nand_health LIMIT 100"
-                ).pl()
-
-
-                st.dataframe(
-                    preview
-                )
-
-
-        except Exception as e:
-
-            st.error(
-                "파일 연결 중 오류가 발생했습니다."
-            )
-
-
-            st.code(
-                str(e)
-            )
-
-
-# =====================================
-# API 키 확인
-# =====================================
-# =====================================
-# API 키 확인
-# =====================================
-
-api_key = os.environ.get("OPENAI_API_KEY")
-
-if not api_key:
-
-    st.error("OPENAI_API_KEY가 설정되지 않았습니다.")
-
-    st.stop()
-
-
-client = OpenAI(api_key=api_key)
-
-
-# =====================================
-# 예시)컬럼 확정 후 수정
+# 컬럼 스키마 설명 (Claude 프롬프트용)
 # =====================================
 
 schema = """
@@ -568,65 +441,8 @@ schema = """
 """
 
 
-
-# =====================================
-# 질문 입력
-# =====================================
-
-question = st.chat_input(
-    "예: PE Cycle이 300 이상인 유닛은 몇 개야?"
-)
-
-
-# =====================================
-# 최근 업로드 Parquet 자동 연결
-# =====================================
-
-if data_mode == "🚀 대용량 Parquet 파일 사용":
-
-    try:
-
-        latest_response = requests.get(
-            "http://127.0.0.1:8000/upload/latest",
-            timeout=3
-        )
-
-        latest_response.raise_for_status()
-
-        upload_info = latest_response.json()
-
-        final_file_path = upload_info[
-            "file_path"
-        ]
-
-        if os.path.exists(
-            final_file_path
-        ):
-
-            con.execute(
-                f"""
-                CREATE OR REPLACE VIEW nand_health AS
-                SELECT *
-                FROM read_parquet(
-                    '{final_file_path}'
-                )
-                """
-            )
-
-    except requests.exceptions.RequestException:
-
-        pass
-if question:
-
-    st.chat_message("user").write(question)
-
-    # =====================================
-    # AI SQL 생성 #컬럼 확정후 수정
-    # =====================================
-
-    with st.spinner("AI가 SQL을 생성하는 중..."):
-
-        prompt = f"""
+def _build_sql_prompt(question: str) -> str:
+    return f"""
 너는 NAND Health 데이터 분석용 SQL 생성기다.
 
 {schema}
@@ -1238,168 +1054,130 @@ SQL을 출력하기 전에 반드시 다음을 확인한다.
 SQL:
 """
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "너는 정확한 SQL을 생성하는 데이터 분석 전문가다."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            temperature=0
-        )
 
-        sql = response.choices[0].message.content.strip()
-    
-        sql = sql.replace("```sql", "")
-        sql = sql.replace("```", "")
-        sql = sql.strip()
-    
-    
-    # =====================================
-    # 생성된 SQL 표시
-    # =====================================
-    
-    st.subheader("🧠 AI가 생성한 SQL")
-    
-    st.code(
-        sql,
-        language="sql"
+def generate_sql(question: str) -> str:
+    """자연어 질문을 nand_health 테이블에 대한 SELECT SQL 문 하나로 변환한다."""
+
+    prompt = _build_sql_prompt(question)
+
+    response = client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=1024,
+        system="너는 정확한 SQL을 생성하는 데이터 분석 전문가다.",
+        messages=[
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        temperature=0
     )
-    
-    
-    # =====================================
-    # SQL 검증 및 실행
-    # =====================================
-    
-    try:
-    
-        is_valid, error_message = validate_sql(sql)
-    
-        if not is_valid:
-    
-            st.error(
-                f"❌ SQL 검증 실패: {error_message}"
-            )
-    
-            st.stop()
-    
-    
-        result = con.execute(sql).pl()
-    
-    
-        # =====================================
-        # 분석 결과
-        # =====================================
-    
-        st.subheader("📊 분석 결과")
-    
-        st.dataframe(result)
-    
-    
-        # =====================================
-        # AI 결과 요약
-        # =====================================
-    
-        result_text = str(result)
-    
-        summary_prompt = f"""
-    너는 NAND Health 데이터 분석 결과를 쉽게 설명하는 분석 전문가다.
-    
-    사용자 질문:
-    {question}
-    
-    SQL 실행 결과:
-    {result_text}
-    
-    규칙:
-    1. 결과를 한국어로 한두 문장으로 요약한다.
-    2. 숫자는 가능한 한 천 단위 쉼표를 사용한다.
-    3. 결과에 없는 내용은 추측하지 않는다.
-    4. 분석 결과만 간결하게 설명한다.
-    5. 결과가 "질문의 기준이 명확하지 않습니다."라면
-       기준이 명확하지 않아 분석할 수 없다고 설명한다.
-    
-    요약:
+
+    sql = response.content[0].text.strip()
+
+    sql = sql.replace("```sql", "")
+    sql = sql.replace("```", "")
+    sql = sql.strip()
+
+    return sql
+
+
+def summarize_result(question: str, result: "pl.DataFrame") -> str:
+    """SQL 실행 결과를 한국어 한두 문장으로 요약한다."""
+
+    result_text = str(result)
+
+    summary_prompt = f"""
+너는 NAND Health 데이터 분석 결과를 쉽게 설명하는 분석 전문가다.
+
+사용자 질문:
+{question}
+
+SQL 실행 결과:
+{result_text}
+
+규칙:
+1. 결과를 한국어로 한두 문장으로 요약한다.
+2. 숫자는 가능한 한 천 단위 쉼표를 사용한다.
+3. 결과에 없는 내용은 추측하지 않는다.
+4. 분석 결과만 간결하게 설명한다.
+5. 결과가 "질문의 기준이 명확하지 않습니다."라면
+   기준이 명확하지 않아 분석할 수 없다고 설명한다.
+
+요약:
+"""
+
+    summary_response = client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=512,
+        messages=[
+            {
+                "role": "user",
+                "content": summary_prompt
+            }
+        ],
+        temperature=0
+    )
+
+    return summary_response.content[0].text.strip()
+
+
+def answer_question(con, question: str) -> dict:
     """
-    
-    
-        summary_response = client.chat.completions.create(
+    자연어 질문 하나를 SQL 생성 -> 검증 -> 실행 -> 요약까지 처리하고
+    frontend/README.md 에 정의된 것과 같은 형식의 dict를 반환한다.
 
-            model="gpt-4o-mini",
+    frontend/app.py 의 create_demo_result(question) 을
+    이 함수 호출로 교체하면 실제 데이터와 연결된다.
 
-            messages=[
+    반환 형식:
+    {
+        "answer": str,                # 한두 문장 요약
+        "data": list[dict],           # SQL 실행 결과 (행 단위 dict 리스트)
+        "table": str,                 # 조회한 테이블명
+        "recognized_columns": list,   # 결과에 포함된 컬럼 목록
+        "sql": str,                   # 생성된 SQL
+        "validation": str,            # 검증 통과 여부 및 사유
+        "chart": dict,                # 시각화 힌트 (현재는 비어있음, 필요 시 규칙 추가)
+    }
+    """
 
-                {
-                    "role": "user",
-                    "content": summary_prompt
-                }
+    sql = generate_sql(question)
 
-            ],
+    is_valid, error_message = validate_sql(sql)
 
-            temperature=0
+    if not is_valid:
+        return {
+            "answer": f"SQL 검증에 실패했습니다: {error_message}",
+            "data": [],
+            "table": ALLOWED_TABLE,
+            "recognized_columns": [],
+            "sql": sql,
+            "validation": f"실패 - {error_message}",
+            "chart": {},
+        }
 
-        )
-
-
-        summary = (
-            summary_response
-            .choices[0]
-            .message.content
-            .strip()
-        )
-    
-    
-        st.subheader("💡 AI 분석 요약")
-    
-        st.info(summary)
-    
-    
-        # =====================================
-        # 단일 결과면 Metric 또는 메시지 표시
-        # =====================================
-    
-        if (
-            result.shape[0] == 1
-            and result.shape[1] == 1
-        ):
-    
-            value = result.item(
-                row=0,
-                column=0
-            )
-    
-    
-            # 숫자인 경우
-            if isinstance(value, (int, float)):
-    
-                st.metric(
-    
-                    label="분석 결과",
-    
-                    value=f"{value:,.0f}"
-    
-                )
-    
-    
-            # 문자열인 경우
-            else:
-    
-                st.info(
-                    str(value)
-                )
-    
-    
+    try:
+        result = con.execute(sql).pl()
     except Exception as e:
-    
-        st.error(
-            "SQL 실행 중 오류가 발생했습니다."
-         )
-    
-        st.code(
-            str(e)
-        )
+        return {
+            "answer": "SQL 실행 중 오류가 발생했습니다.",
+            "data": [],
+            "table": ALLOWED_TABLE,
+            "recognized_columns": [],
+            "sql": sql,
+            "validation": f"실행 오류 - {e}",
+            "chart": {},
+        }
+
+    summary = summarize_result(question, result)
+
+    return {
+        "answer": summary,
+        "data": result.to_dicts(),
+        "table": ALLOWED_TABLE,
+        "recognized_columns": result.columns,
+        "sql": sql,
+        "validation": "통과",
+        "chart": {},
+    }
