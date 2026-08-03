@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,10 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from PIL import Image
+
+# llm_sql 모듈 경로 추가
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "llm_sql"))
+from app import get_duckdb_connection, load_into_duckdb, answer_question
 
 
 # ---------------------------------------------------------
@@ -309,6 +314,15 @@ if "messages" not in st.session_state:
 if "pending_prompt" not in st.session_state:
     st.session_state.pending_prompt = None
 
+if "con" not in st.session_state:
+    st.session_state.con = get_duckdb_connection()
+
+if "data_loaded" not in st.session_state:
+    st.session_state.data_loaded = False
+
+if "row_count" not in st.session_state:
+    st.session_state.row_count = 0
+
 
 def reset_chat() -> None:
     st.session_state.messages = []
@@ -354,26 +368,45 @@ with st.sidebar:
         st.caption("아직 대화 기록이 없습니다.")
 
     st.markdown("---")
-    st.markdown("##### 데이터 상태")
-    st.markdown(
-        """
-        <div class="data-card">
-            <div class="status-line">
-                <span class="status-dot"></span>
-                CSV 데이터 연결 완료
-            </div>
-            <div class="data-meta">
-                전체 데이터: 약 20GB<br>
-                조회 방식: 자연어 → SQL<br>
-                현재 화면: UI 데모 모드
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    st.markdown("##### 데이터 업로드")
+
+    uploaded_file = st.file_uploader(
+        "CSV 파일을 선택하세요",
+        type=["csv"],
+        label_visibility="collapsed",
     )
 
+    if uploaded_file is not None:
+        with st.spinner("데이터 로드 중..."):
+            try:
+                row_count = load_into_duckdb(st.session_state.con, uploaded_file)
+                st.session_state.data_loaded = True
+                st.session_state.row_count = row_count
+                st.session_state.messages = []
+            except Exception as e:
+                st.error(f"파일 로드 실패: {e}")
+
+    if st.session_state.data_loaded:
+        st.markdown(
+            f"""
+            <div class="data-card">
+                <div class="status-line">
+                    <span class="status-dot"></span>
+                    CSV 데이터 연결 완료
+                </div>
+                <div class="data-meta">
+                    총 행 수: {st.session_state.row_count:,}행<br>
+                    조회 방식: 자연어 → SQL
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.caption("파일을 업로드하면 질문할 수 있습니다.")
+
     st.markdown("---")
-    st.caption("SUNNY 9조 · UI Prototype v1.0")
+    st.caption("SUNNY 9조 · v1.0")
 
 
 # ---------------------------------------------------------
@@ -614,25 +647,15 @@ if prompt:
     with st.chat_message("assistant", avatar=sunny_avatar):
         completed_steps: list[str] = []
 
-        with st.status(
-            "질문을 처리하고 있습니다.",
-            expanded=True,
-        ) as status:
-            stages = [
-                "사용자 질문을 분석하고 있습니다.",
-                "질문과 관련된 테이블 및 컬럼을 확인하고 있습니다.",
-                "자연어 질문을 SQL로 변환하고 있습니다.",
-                "생성된 SQL의 정확도를 검증하고 있습니다.",
-                "데이터를 조회하고 있습니다.",
-                "조회 결과에 맞는 시각화를 준비하고 있습니다.",
-            ]
+        if not st.session_state.data_loaded:
+            st.warning("사이드바에서 CSV 파일을 먼저 업로드해 주세요.")
+            st.stop()
 
-            for stage in stages:
-                status.write(f"⏳ {stage}")
-                completed_steps.append(stage)
-                time.sleep(0.38)
+        with st.status("질문을 처리하고 있습니다.", expanded=True) as status:
+            status.write("⏳ 스키마를 확인하고 있습니다.")
+            status.write("⏳ 자연어 질문을 SQL로 변환하고 있습니다.")
 
-            answer, result_df, verification = create_demo_result(prompt)
+            result = answer_question(st.session_state.con, prompt)
 
             status.update(
                 label="분석이 완료되었습니다.",
@@ -642,9 +665,16 @@ if prompt:
 
         assistant_message = {
             "role": "assistant",
-            "content": answer,
-            "data": result_df.to_dict(orient="records"),
-            "verification": verification,
+            "content": result["answer"],
+            "data": result["data"],
+            "verification": {
+                "table": result["table"],
+                "recognized_columns": result["recognized_columns"],
+                "sql": result["sql"],
+                "validation": result["validation"],
+                "row_count": len(result["data"]),
+                "chart": result.get("chart", {}),
+            },
             "steps": completed_steps,
         }
 
