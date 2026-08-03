@@ -1,64 +1,80 @@
-# SUNNY 9조 Streamlit 챗봇 UI
+# frontend/
 
-배경 이미지와 써니 캐릭터를 적용한 품질 데이터 챗봇 UI 데모입니다.
+SUNNY 9조 품질 데이터 챗봇의 Streamlit UI입니다. 전체 아키텍처와 동작
+원리는 [프로젝트 루트 README](../README.md)를 참고하세요. 이 문서는
+`frontend/` 폴더 자체의 실행/구성 방법만 다룹니다.
 
-## 가장 빠른 실행 방법 (Windows)
+## 실행 방법
 
-1. ZIP 파일의 압축을 풉니다.
-2. 폴더 안의 `실행하기.bat`를 더블 클릭합니다.
-3. 처음 실행할 때 필요한 패키지가 자동으로 설치됩니다.
-4. 브라우저가 열리면 화면을 확인합니다.
+### 가장 빠른 방법 (Windows)
 
-## 터미널에서 직접 실행
+1. 프로젝트 최상위 폴더에 `.env` 파일을 만들고 `ANTHROPIC_API_KEY`를
+   넣습니다 (루트 README 참고).
+2. `frontend/RUN_CHATBOT.bat`를 더블 클릭합니다. 필요한 패키지가
+   자동으로 설치되고 브라우저가 열립니다.
+
+### 터미널에서 직접 실행
 
 ```bash
-python -m pip install -r requirements.txt
-python -m streamlit run app.py
+pip install -r frontend/requirements.txt
+streamlit run frontend/app.py
 ```
 
-## 현재 구현된 기능
+`frontend/requirements.txt`는 `llm_sql/requirements.txt`를 상속하므로
+DuckDB, Claude SDK 등 `llm_sql/` 의존성도 이 한 번의 설치로 함께
+들어갑니다.
 
-- 운동장 배경 이미지
-- 써니 캐릭터 프로필
-- ChatGPT 형태의 채팅 화면
-- 새 채팅 및 최근 질문 표시
-- 처리 단계 상태 메시지
-- 결과 데이터 표
-- 자동 그래프
-- SQL 및 검증 정보 펼쳐보기
-- 추천 질문 버튼
-- 데모 응답
+### 대용량 파일(10GB+)을 다뤄야 한다면
 
-## 실제 API 연결 위치
+`frontend/`만으로는 부족하고, 별도 터미널에서 `backend/` FastAPI
+서버도 함께 띄워야 합니다. 자세한 내용은 루트 README의 "대용량 파일을
+다뤄야 할 때" 항목을 참고하세요.
 
-`app.py` 안의 아래 함수를 팀 백엔드 API 호출 코드로 교체하면 됩니다.
+```bash
+uvicorn backend.upload_server:app --port 8000
+```
+
+## 화면 구성
+
+- **사이드바**
+  - 새 채팅 / 최근 대화 목록
+  - CSV 업로드 (일반, ~수백 MB 이하)
+  - 대용량 파일 업로드 (10GB+, backend 서버 직접 연결)
+- **메인 화면**
+  - 추천 질문 버튼 3개
+  - 채팅 입력창 — 질문을 보내면 `llm_sql/app.py::answer_question()`이
+    SQL 생성 → 검증 → 실행 → 요약까지 처리한 뒤, 답변 메시지 하단에
+    다음 3개 탭으로 결과를 보여줍니다.
+    - **핵심 결과**: 조회한 테이블, 인식한 컬럼, 조회 행 수
+    - **데이터 표**: 실행 결과 전체 (표)
+    - **시각화**: Claude가 함께 만들어 준 차트 힌트로 그린 막대/선/원
+      그래프 (차트로 표현하기 애매한 결과는 빈 상태로 표시될 수 있음)
+    - 그 아래 "SQL 및 검증 정보" 펼치기 — 생성된 SQL과 검증 통과 여부
+
+데이터를 업로드하기 전에는 질문을 보낼 수 없고, 사이드바에 안내 문구가
+표시됩니다.
+
+## 실제 로직이 붙어있는 위치
+
+이 폴더의 UI는 데모가 아니라 실제로 동작합니다. `frontend/app.py`는
+`llm_sql/app.py`의 다음 함수들을 그대로 가져다 씁니다.
 
 ```python
-def create_demo_result(question: str):
-    ...
+from app import (
+    get_duckdb_connection,
+    load_into_duckdb,
+    connect_latest_parquet,
+    answer_question,
+)
 ```
 
-실제 API 응답은 다음 정보를 반환하도록 맞추면 화면 연결이 쉽습니다.
+챗봇의 SQL 생성/검증/실행/요약 로직 자체를 수정하려면 이 폴더가 아니라
+[`llm_sql/app.py`](../llm_sql/app.py)를 고치면 됩니다. `frontend/`는
+그 결과를 화면에 그리는 역할만 합니다.
 
-```json
-{
-  "answer": "분석 답변",
-  "data": [
-    {"제품군": "UFS", "불량건수": 18}
-  ],
-  "table": "quality_data",
-  "recognized_columns": ["제품군", "lvd_cnt"],
-  "sql": "SELECT ...",
-  "validation": "passed",
-  "chart": {
-    "type": "bar",
-    "x": "제품군",
-    "y": "불량건수"
-  }
-}
-```
-
-## 이미지 파일
+## 디자인 에셋
 
 - `assets/sunny_bg.png`: 전체 배경
 - `assets/sunny_avatar.png`: 챗봇 프로필 이미지
+- `.streamlit/config.toml`: 테마 색상, 업로드 용량 상한
+  (`maxUploadSize`, 현재 20GB) 설정

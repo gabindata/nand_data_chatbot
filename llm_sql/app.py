@@ -191,8 +191,11 @@ SQL_KEYWORDS = {
 SQL_FUNCTIONS = {
     "COUNT", "AVG", "SUM", "MAX", "MIN",
     "ROUND", "COALESCE", "CAST", "NULLIF", "IFNULL",
-    "STRFTIME", "DATE", "YEAR", "MONTH", "DAY",
+    "STRFTIME", "DATE", "YEAR", "MONTH", "DAY", "DATE_PART",
     "UPPER", "LOWER", "TRIM", "LENGTH",
+    "SUBSTR", "CONCAT", "REPLACE", "POSITION",
+    "STDDEV", "VARIANCE", "MEDIAN",
+    "ABS", "POWER", "SQRT", "GREATEST", "LEAST",
 }
 
 SQL_TYPES = {
@@ -316,9 +319,13 @@ def _build_sql_prompt(question: str, schema: str) -> str:
 4. DROP, DELETE, UPDATE, INSERT, ALTER, CREATE 등은 절대 사용하지 않는다.
 5. 질문에 없는 조건을 임의로 추가하지 않는다.
 6. 다음 함수만 사용할 수 있다: COUNT, AVG, SUM, MAX, MIN, ROUND, COALESCE,
-   CAST, NULLIF, IFNULL, STRFTIME, DATE, YEAR, MONTH, DAY, UPPER, LOWER,
-   TRIM, LENGTH. 이 목록에 없는 함수는 사용하지 않는다.
-7. 결과 컬럼에 별칭(AS)을 붙일 때는 원본 컬럼명 대신 의미가 드러나는
+   CAST, NULLIF, IFNULL, STRFTIME, DATE, YEAR, MONTH, DAY, DATE_PART,
+   UPPER, LOWER, TRIM, LENGTH, SUBSTR, CONCAT, REPLACE, POSITION,
+   STDDEV, VARIANCE, MEDIAN, ABS, POWER, SQRT, GREATEST, LEAST.
+   이 목록에 없는 함수는 사용하지 않는다.
+7. 날짜에서 일부를 뽑을 때는 EXTRACT(... FROM ...) 대신
+   DATE_PART('year', 컬럼) 형태의 함수 호출 문법을 사용한다.
+8. 결과 컬럼에 별칭(AS)을 붙일 때는 원본 컬럼명 대신 의미가 드러나는
    이름을 쓴다 (예: COUNT(*) AS cnt).
 
 조건 표현:

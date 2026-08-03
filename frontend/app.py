@@ -553,67 +553,6 @@ with st.sidebar:
     st.caption("SUNNY 9조 · v1.0")
 
 
-# ---------------------------------------------------------
-# 데모 파이프라인
-# 실제 API 연결 시 이 함수만 교체하면 됩니다.
-# ---------------------------------------------------------
-def create_demo_result(question: str) -> tuple[str, pd.DataFrame, dict[str, Any]]:
-    lowered = question.lower()
-
-    if "월" in question or "추이" in question:
-        df = pd.DataFrame(
-            {
-                "월": ["1월", "2월", "3월", "4월", "5월", "6월"],
-                "불량건수": [22, 18, 25, 16, 13, 11],
-            }
-        )
-        answer = (
-            "월별 불량 건수는 3월에 25건으로 가장 높았고, "
-            "4월부터 감소하여 6월에는 11건으로 확인됩니다."
-        )
-        chart = {"type": "line", "x": "월", "y": "불량건수"}
-
-    elif "제품" in question or "ufs" in lowered or "emmc" in lowered:
-        df = pd.DataFrame(
-            {
-                "제품군": ["UFS", "eMMC", "SSD", "NAND"],
-                "LVD 불량건수": [18, 11, 8, 14],
-            }
-        )
-        answer = (
-            "제품군별 LVD 불량 건수를 조회한 결과 UFS가 18건으로 가장 많았습니다. "
-            "다음은 NAND 14건, eMMC 11건, SSD 8건 순입니다."
-        )
-        chart = {"type": "bar", "x": "제품군", "y": "LVD 불량건수"}
-
-    else:
-        df = pd.DataFrame(
-            {
-                "공정": ["A 공정", "B 공정", "C 공정", "D 공정"],
-                "불량률(%)": [1.8, 2.7, 1.2, 2.1],
-            }
-        )
-        answer = (
-            "조회 결과 B 공정의 불량률이 2.7%로 가장 높았습니다. "
-            "실제 API가 연결되면 이 영역에 데이터 기반 답변이 표시됩니다."
-        )
-        chart = {"type": "bar", "x": "공정", "y": "불량률(%)"}
-
-    verification = {
-        "table": "quality_data",
-        "recognized_columns": [chart["x"], chart["y"]],
-        "sql": (
-            f"SELECT {chart['x']}, SUM({chart['y']}) AS result "
-            f"FROM quality_data GROUP BY {chart['x']};"
-        ),
-        "validation": "UI 데모용 검증 완료",
-        "row_count": len(df),
-        "chart": chart,
-    }
-
-    return answer, df, verification
-
-
 def render_chart(df: pd.DataFrame, chart: dict[str, str]) -> None:
     chart_type = chart.get("type")
     x_column = chart.get("x")
