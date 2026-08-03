@@ -324,7 +324,6 @@ def generate_sql(question: str, schema: str) -> str:
         max_tokens=1024,
         system="너는 정확한 SQL을 생성하는 데이터 분석 전문가다.",
         messages=[{"role": "user", "content": _build_sql_prompt(question, schema)}],
-        temperature=0,
     )
     sql = response.content[0].text.strip()
     sql = re.sub(r"```sql|```", "", sql).strip()
@@ -358,7 +357,6 @@ SQL 실행 결과:
         model=CLAUDE_MODEL,
         max_tokens=512,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0,
     )
     return response.content[0].text.strip()
 
