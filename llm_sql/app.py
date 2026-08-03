@@ -281,17 +281,32 @@ def validate_sql(sql: str, allowed_cols: set[str]) -> tuple[bool, str]:
 
 MAX_RESULT_ROWS = 5000
 
+# LIMIT을 붙일 때 실제 전체 매칭 행수를 함께 실어 보내기 위한 임시 컬럼명.
+# 실제 데이터 컬럼과 겹치지 않도록 이중 밑줄을 앞뒤로 붙인다.
+TOTAL_COUNT_COL = "__row_limit_total__"
+
 
 def _apply_row_limit(sql: str, max_rows: int = MAX_RESULT_ROWS) -> tuple[str, bool]:
     """
     수십 GB 규모 데이터에서 LIMIT 없는 쿼리가 결과를 통째로 끌고 오지
     않도록 상한을 강제한다. 이미 LIMIT이 있으면 그대로 둔다.
+
+    상한을 새로 적용할 때는 COUNT(*) OVER() 창 함수로 LIMIT 적용 전
+    전체 행수(TOTAL_COUNT_COL)를 같이 실어 보낸다. 그래야 나열형 쿼리가
+    잘리더라도 "실제로 몇 건이 조건에 맞았는지"를 잃어버리지 않는다.
+
     반환: (실행할 SQL, 상한을 새로 적용했는지 여부)
     """
     s = sql.strip().rstrip(";").strip()
     if re.search(r"\bLIMIT\s+\d+\b", s, re.IGNORECASE):
         return s, False
-    return f"{s} LIMIT {max_rows}", True
+
+    wrapped = (
+        f"SELECT *, COUNT(*) OVER() AS {TOTAL_COUNT_COL} "
+        f"FROM ({s}) AS __row_limit_subquery "
+        f"LIMIT {max_rows}"
+    )
+    return wrapped, True
 
 
 # =====================================
@@ -410,20 +425,37 @@ def generate_sql_and_chart(question: str, schema: str) -> dict:
 SUMMARY_PREVIEW_ROWS = 30
 
 
-def summarize_result(question: str, result: pl.DataFrame) -> str:
+def summarize_result(
+    question: str, result: pl.DataFrame, total_rows: int | None = None
+) -> str:
     """
     SQL 실행 결과를 한국어 한두 문장으로 요약한다.
     결과가 클 수 있으므로 프롬프트에는 앞부분 일부만 미리보기로 넣는다.
-    """
-    total_rows = len(result)
-    truncated = total_rows > SUMMARY_PREVIEW_ROWS
-    preview = result.head(SUMMARY_PREVIEW_ROWS) if truncated else result
 
-    preview_note = (
-        f"(전체 {total_rows:,}행 중 앞 {SUMMARY_PREVIEW_ROWS}행 미리보기)"
-        if truncated
-        else ""
+    total_rows: LIMIT으로 잘리기 전 실제 전체 매칭(또는 집계) 행수.
+                넘기지 않으면 result 길이를 그대로 전체로 취급한다.
+    """
+    shown_rows = len(result)
+    if total_rows is None:
+        total_rows = shown_rows
+
+    preview = (
+        result.head(SUMMARY_PREVIEW_ROWS)
+        if shown_rows > SUMMARY_PREVIEW_ROWS
+        else result
     )
+
+    if total_rows > shown_rows:
+        # LIMIT 때문에 조회 자체가 잘린 경우 — 미리보기가 아니라
+        # "더 많은 결과 중 일부만 가져왔다"는 걸 분명히 알려야 한다.
+        preview_note = (
+            f"(조건에 맞는 전체 {total_rows:,}행 중 상위 {shown_rows:,}행만 "
+            f"조회됨, 그중 앞 {len(preview):,}행 미리보기)"
+        )
+    elif shown_rows > SUMMARY_PREVIEW_ROWS:
+        preview_note = f"(전체 {total_rows:,}행 중 앞 {SUMMARY_PREVIEW_ROWS}행 미리보기)"
+    else:
+        preview_note = ""
 
     prompt = f"""
 너는 데이터 분석 결과를 쉽게 설명하는 전문가다.
@@ -439,7 +471,10 @@ SQL 실행 결과 {preview_note}:
 2. 숫자는 천 단위 쉼표를 사용한다.
 3. 결과에 없는 내용은 추측하지 않는다.
 4. 결과가 "질문의 기준이 명확하지 않습니다."라면 기준이 명확하지 않아 분석할 수 없다고 설명한다.
-5. 미리보기라고 표시되어 있다면, 전체 {total_rows:,}행 중 일부만 보고 있다는 점을 감안해서 설명한다.
+5. "조건에 맞는 전체"라고 표시되어 있다면, 실제로는 {total_rows:,}행이 조건에
+   맞지만 화면에는 일부만 표시된다는 점을 답변에 분명히 언급한다.
+6. 그 외의 미리보기 표시라면, 전체 {total_rows:,}행 중 일부만 보고 있다는
+   점을 감안해서 설명한다.
 
 요약:
 """
@@ -468,6 +503,7 @@ def answer_question(con, question: str) -> dict:
         "sql": str,                  # 생성된 SQL
         "validation": str,           # 검증 결과
         "chart": dict,               # 시각화 힌트 {"type","x","y"} 또는 빈 dict
+        "total_rows": int,           # LIMIT 적용 전 실제 전체 매칭/집계 행수
     }
     """
     # 1. 현재 업로드된 파일의 스키마를 동적으로 읽기
@@ -482,6 +518,7 @@ def answer_question(con, question: str) -> dict:
             "sql": "",
             "validation": f"스키마 읽기 실패 - {e}",
             "chart": {},
+            "total_rows": 0,
         }
 
     # 2. SQL + 차트 힌트 생성
@@ -500,13 +537,14 @@ def answer_question(con, question: str) -> dict:
             "sql": sql,
             "validation": f"실패 - {error_message}",
             "chart": {},
+            "total_rows": 0,
         }
 
     # 4. 결과 행수 상한 적용 후 실행
     #    (수십 GB 규모 파일에서 LIMIT 없는 쿼리가 전체를 끌고 오지 않도록 방지)
     exec_sql, limit_applied = _apply_row_limit(sql)
     try:
-        result = con.execute(exec_sql).pl()
+        raw_result = con.execute(exec_sql).pl()
     except Exception as e:
         return {
             "answer": "SQL 실행 중 오류가 발생했습니다.",
@@ -516,7 +554,19 @@ def answer_question(con, question: str) -> dict:
             "sql": sql,
             "validation": f"실행 오류 - {e}",
             "chart": {},
+            "total_rows": 0,
         }
+
+    # 상한 적용 시 같이 실어 보낸 실제 전체 매칭 행수를 분리해낸다.
+    # (LIMIT으로 잘려도 "실제로 몇 건이었는지"를 잃어버리지 않기 위함)
+    if limit_applied and TOTAL_COUNT_COL in raw_result.columns:
+        true_total = (
+            int(raw_result[TOTAL_COUNT_COL][0]) if len(raw_result) > 0 else 0
+        )
+        result = raw_result.drop(TOTAL_COUNT_COL)
+    else:
+        true_total = len(raw_result)
+        result = raw_result
 
     # 5. 차트 힌트를 실제 결과 컬럼과 대조해서 검증
     chart: dict = {}
@@ -531,12 +581,15 @@ def answer_question(con, question: str) -> dict:
         ):
             chart = {"type": chart_type, "x": chart_x, "y": chart_y}
 
-    # 6. 결과 요약
-    summary = summarize_result(question, result)
+    # 6. 결과 요약 (실제 전체 매칭 행수를 함께 전달)
+    summary = summarize_result(question, result, total_rows=true_total)
 
     validation_msg = "통과"
-    if limit_applied and len(result) >= MAX_RESULT_ROWS:
-        validation_msg += f" (결과가 많아 상위 {MAX_RESULT_ROWS:,}행만 조회됨)"
+    if true_total > len(result):
+        validation_msg += (
+            f" (조건에 맞는 전체 {true_total:,}행 중 상위 "
+            f"{len(result):,}행만 조회됨)"
+        )
 
     return {
         "answer": summary,
@@ -546,4 +599,5 @@ def answer_question(con, question: str) -> dict:
         "sql": sql,
         "validation": validation_msg,
         "chart": chart,
+        "total_rows": true_total,
     }

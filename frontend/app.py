@@ -611,6 +611,13 @@ def render_assistant_message(message: dict[str, Any]) -> None:
 
         with tab_answer:
             verification = message.get("verification", {})
+            row_count = verification.get("row_count", len(df))
+            total_rows = verification.get("total_rows", row_count)
+
+            row_count_line = f"`{row_count:,}개`"
+            if total_rows > row_count:
+                row_count_line += f" (조건에 맞는 전체 `{total_rows:,}개` 중 상위 {row_count:,}개만 조회됨)"
+
             st.markdown(
                 f"""
                 **선택한 테이블**  
@@ -620,7 +627,7 @@ def render_assistant_message(message: dict[str, Any]) -> None:
                 `{", ".join(verification.get("recognized_columns", []))}`
 
                 **조회 행 수**  
-                `{verification.get("row_count", len(df))}개`
+                {row_count_line}
                 """
             )
 
@@ -756,6 +763,7 @@ if prompt:
                 "sql": result["sql"],
                 "validation": result["validation"],
                 "row_count": len(result["data"]),
+                "total_rows": result.get("total_rows", len(result["data"])),
                 "chart": result.get("chart", {}),
             },
             "steps": completed_steps,
