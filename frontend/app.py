@@ -81,6 +81,8 @@ document.getElementById("sunnyUploadBtn").addEventListener("click", async () => 
   const totalChunks = uploadInfo.total_chunks;
   const chunkSize = uploadInfo.chunk_size;
 
+  const startTime = Date.now();
+
   for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
     const start = chunkIndex * chunkSize;
     const end = Math.min(start + chunkSize, file.size);
@@ -102,10 +104,29 @@ document.getElementById("sunnyUploadBtn").addEventListener("click", async () => 
       return;
     }
 
-    const progress = ((chunkIndex + 1) / totalChunks) * 100;
+    const uploadedBytes = end;
+    const elapsedSec = (Date.now() - startTime) / 1000;
+    const progress = (uploadedBytes / file.size) * 100;
     progressBar.value = progress;
-    status.innerText = "업로드 중... " + (chunkIndex + 1) + " / " + totalChunks + " 청크";
+
+    let statusText = "업로드 중... " + (chunkIndex + 1) + " / " + totalChunks
+      + " 청크 (" + formatBytes(uploadedBytes) + " / " + formatBytes(file.size) + ")";
+
+    // 초반 1초 미만은 속도가 불안정해서 ETA를 생략한다.
+    if (elapsedSec > 1 && uploadedBytes < file.size) {
+      const bytesPerSec = uploadedBytes / elapsedSec;
+      const remainingSec = (file.size - uploadedBytes) / bytesPerSec;
+      statusText += " · 약 " + formatDuration(remainingSec) + " 남음";
+    }
+    status.innerText = statusText;
   }
+
+  // 청크 전송은 끝났지만 서버가 CSV → Parquet 변환을 하는 동안은
+  // 정확한 진행률을 알 수 없어 progress bar를 불확정(애니메이션) 상태로 바꾼다.
+  progressBar.removeAttribute("value");
+  status.innerText = "청크 전송 완료. 서버에서 CSV → Parquet 변환 중입니다... "
+    + "(파일 크기 기준 약 " + formatDuration(estimateConversionSeconds(file.size)) + " 예상, "
+    + "실제 소요 시간은 서버 성능에 따라 다를 수 있습니다)";
 
   const completeData = new FormData();
   completeData.append("upload_id", uploadId);
@@ -121,6 +142,32 @@ document.getElementById("sunnyUploadBtn").addEventListener("click", async () => 
   progressBar.value = 100;
   status.innerText = "업로드 완료! 아래 '업로드한 데이터 불러오기' 버튼을 눌러주세요.";
 });
+
+function formatBytes(bytes) {
+  if (bytes >= 1024 * 1024 * 1024) {
+    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + "GB";
+  }
+  return (bytes / (1024 * 1024)).toFixed(0) + "MB";
+}
+
+function formatDuration(seconds) {
+  if (!isFinite(seconds) || seconds < 0) {
+    return "계산 중";
+  }
+  if (seconds < 60) {
+    return Math.max(1, Math.round(seconds)) + "초";
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainSec = Math.round(seconds % 60);
+  return minutes + "분 " + remainSec + "초";
+}
+
+// 서버 디스크/CPU 성능에 따라 실제와 다를 수 있는 대략적인 추정치.
+// (로컬 SSD 기준 스트리밍 변환 처리량을 대략 150MB/s로 가정)
+function estimateConversionSeconds(fileSizeBytes) {
+  const ASSUMED_THROUGHPUT = 150 * 1024 * 1024;
+  return fileSizeBytes / ASSUMED_THROUGHPUT;
+}
 </script>
 """
 
@@ -257,12 +304,18 @@ st.markdown(
         gap: 7px;
         padding: 6px 10px;
         border-radius: 999px;
-        color: #167ca4;
-        background: rgba(225, 247, 255, 0.88);
-        border: 1px solid rgba(87, 184, 220, 0.24);
+        color: #1f9d63;
+        background: rgba(224, 250, 238, 0.88);
+        border: 1px solid rgba(37, 185, 111, 0.28);
         font-size: 12px;
         font-weight: 750;
         margin-bottom: 10px;
+    }}
+
+    .hero-badge--offline {{
+        color: #7a8b93;
+        background: rgba(238, 242, 244, 0.88);
+        border: 1px solid rgba(150, 165, 172, 0.28);
     }}
 
     .hero-title {{
@@ -663,10 +716,17 @@ def render_assistant_message(message: dict[str, Any]) -> None:
 # ---------------------------------------------------------
 # 메인 화면
 # ---------------------------------------------------------
+if st.session_state.data_loaded:
+    hero_badge_class = "hero-badge"
+    hero_badge_text = "● CSV 데이터 연결 완료"
+else:
+    hero_badge_class = "hero-badge hero-badge--offline"
+    hero_badge_text = "○ 데이터 미연결"
+
 st.markdown(
-    """
+    f"""
     <section class="hero">
-        <div class="hero-badge">● CSV 데이터 연결 완료</div>
+        <div class="{hero_badge_class}">{hero_badge_text}</div>
         <h1 class="hero-title">SUNNY 데이터 챗봇</h1>
         <p class="hero-description">
             품질 데이터를 자연어로 검색하고, 조회 결과를 표와 그래프로 확인하세요.
@@ -677,13 +737,20 @@ st.markdown(
 )
 
 if not st.session_state.messages:
+    if st.session_state.data_loaded:
+        welcome_text = "아래 추천 질문을 누르거나 채팅창에 직접 질문해 보세요."
+    else:
+        welcome_text = (
+            "먼저 왼쪽 사이드바에서 CSV 파일을 업로드해 주세요.<br>"
+            "업로드가 끝나면 아래 추천 질문을 누르거나 채팅창에 직접 질문할 수 있어요."
+        )
+
     st.markdown(
-        """
+        f"""
         <div class="welcome-card">
             <div class="welcome-title">안녕하세요! 써니가 데이터를 찾아드릴게요 ☀️</div>
             <div class="welcome-text">
-                아래 추천 질문을 누르거나 채팅창에 직접 질문해 보세요.<br>
-                현재는 화면 확인을 위한 데모 데이터가 연결되어 있습니다.
+                {welcome_text}
             </div>
         </div>
         """,
@@ -742,10 +809,11 @@ if prompt:
             st.stop()
 
         with st.status("질문을 처리하고 있습니다.", expanded=True) as status:
-            status.write("⏳ 스키마를 확인하고 있습니다.")
-            status.write("⏳ 자연어 질문을 SQL로 변환하고 있습니다.")
-
-            result = answer_question(st.session_state.con, prompt)
+            result = answer_question(
+                st.session_state.con,
+                prompt,
+                on_progress=lambda msg: status.write(f"⏳ {msg}"),
+            )
 
             status.update(
                 label="분석이 완료되었습니다.",

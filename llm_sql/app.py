@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 import os
 import re
+from typing import Callable
+
 import requests
 from dotenv import load_dotenv
 
@@ -313,6 +315,20 @@ def _apply_row_limit(sql: str, max_rows: int = MAX_RESULT_ROWS) -> tuple[str, bo
 # SQL 생성 (Claude API)
 # =====================================
 
+def _extract_text(response) -> str:
+    """
+    Claude 응답에서 실제 텍스트 블록을 찾아 반환한다.
+
+    확장 사고(thinking)를 사용하는 모델은 response.content[0]이 텍스트가
+    아니라 ThinkingBlock일 수 있어서, 항상 첫 블록이 텍스트라고 가정하면
+    안 된다. content 배열을 순회해 type이 "text"인 블록을 찾는다.
+    """
+    for block in response.content:
+        if getattr(block, "type", None) == "text":
+            return block.text
+    raise RuntimeError("Claude 응답에서 텍스트 블록을 찾지 못했습니다.")
+
+
 def _build_sql_prompt(question: str, schema: str) -> str:
     return f"""
 너는 데이터 분석용 SQL 생성기다.
@@ -402,7 +418,7 @@ def generate_sql_and_chart(question: str, schema: str) -> dict:
         ),
         messages=[{"role": "user", "content": _build_sql_prompt(question, schema)}],
     )
-    raw = response.content[0].text.strip()
+    raw = _extract_text(response).strip()
     raw = re.sub(r"```json|```", "", raw).strip()
 
     try:
@@ -483,16 +499,23 @@ SQL 실행 결과 {preview_note}:
         max_tokens=512,
         messages=[{"role": "user", "content": prompt}],
     )
-    return response.content[0].text.strip()
+    return _extract_text(response).strip()
 
 
 # =====================================
 # 메인 파이프라인
 # =====================================
 
-def answer_question(con, question: str) -> dict:
+def answer_question(
+    con, question: str, on_progress: Callable[[str], None] | None = None
+) -> dict:
     """
     자연어 질문 하나를 SQL 생성 → 검증 → 실행 → 요약까지 처리한다.
+
+    on_progress: 각 단계가 시작될 때마다 현재 단계를 설명하는 문자열로
+                 호출되는 콜백. UI에서 실시간 진행 상황을 보여주고 싶을
+                 때 넘긴다 (예: Streamlit st.status().write). 넘기지
+                 않으면 아무 일도 하지 않는다.
 
     반환 형식:
     {
@@ -506,7 +529,13 @@ def answer_question(con, question: str) -> dict:
         "total_rows": int,           # LIMIT 적용 전 실제 전체 매칭/집계 행수
     }
     """
+
+    def notify(message: str) -> None:
+        if on_progress is not None:
+            on_progress(message)
+
     # 1. 현재 업로드된 파일의 스키마를 동적으로 읽기
+    notify("스키마를 확인하고 있습니다.")
     try:
         schema_str, allowed_cols = get_schema(con)
     except Exception as e:
@@ -522,11 +551,13 @@ def answer_question(con, question: str) -> dict:
         }
 
     # 2. SQL + 차트 힌트 생성
+    notify("SQL과 차트를 생성하고 있습니다.")
     generated = generate_sql_and_chart(question, schema_str)
     sql = generated["sql"]
     chart_hint = generated["chart"]
 
     # 3. SQL 검증 (동적 컬럼 기반)
+    notify("SQL을 검증하고 있습니다.")
     is_valid, error_message = validate_sql(sql, allowed_cols)
     if not is_valid:
         return {
@@ -542,6 +573,7 @@ def answer_question(con, question: str) -> dict:
 
     # 4. 결과 행수 상한 적용 후 실행
     #    (수십 GB 규모 파일에서 LIMIT 없는 쿼리가 전체를 끌고 오지 않도록 방지)
+    notify("데이터를 조회하고 있습니다.")
     exec_sql, limit_applied = _apply_row_limit(sql)
     try:
         raw_result = con.execute(exec_sql).pl()
@@ -582,6 +614,7 @@ def answer_question(con, question: str) -> dict:
             chart = {"type": chart_type, "x": chart_x, "y": chart_y}
 
     # 6. 결과 요약 (실제 전체 매칭 행수를 함께 전달)
+    notify("결과를 요약하고 있습니다.")
     summary = summarize_result(question, result, total_rows=true_total)
 
     validation_msg = "통과"
