@@ -2,6 +2,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+import json
 import os
 import uuid
 import math
@@ -268,22 +269,31 @@ async def complete_upload(
         "nand_health.parquet"
     )
 
+    # 변환 도중 다른 사용자가 조회하다 반쪽짜리 parquet을 읽지 않도록
+    # 임시 파일에 먼저 쓰고 완료 후 원자적으로 교체한다.
+    tmp_parquet_file = parquet_file + ".tmp"
 
     try:
 
         pl.scan_csv(final_path).sink_parquet(
-    parquet_file,
-    compression="zstd"
-)
+            tmp_parquet_file,
+            compression="zstd"
+        )
 
+        os.replace(tmp_parquet_file, parquet_file)
 
     except Exception as e:
+
+        if os.path.exists(tmp_parquet_file):
+            os.remove(tmp_parquet_file)
 
         raise HTTPException(
             status_code=500,
             detail=f"CSV 변환 실패: {str(e)}"
         )
 
+    # 원본 CSV는 대용량(수십 GB)일 수 있어 변환 성공 후 바로 정리한다.
+    os.remove(final_path)
 
     # =====================================
     # 최근 업로드 파일 정보 저장
@@ -299,14 +309,14 @@ async def complete_upload(
 
     }
 
+    info_path = "upload_info.json"
+    tmp_info_path = info_path + ".tmp"
 
     with open(
-        "upload_info.json",
+        tmp_info_path,
         "w",
         encoding="utf-8"
     ) as info_file:
-
-        import json
 
         json.dump(
             upload_info,
@@ -314,6 +324,8 @@ async def complete_upload(
             ensure_ascii=False,
             indent=4
         )
+
+    os.replace(tmp_info_path, info_path)
 
 
     return {
@@ -387,9 +399,6 @@ async def get_latest_upload():
             status_code=404,
             detail="업로드된 파일이 없습니다."
         )
-
-
-    import json
 
 
     with open(

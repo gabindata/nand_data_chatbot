@@ -15,6 +15,7 @@ NAND Health 챗봇의 AI+SQL 로직 모듈.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import requests
@@ -110,6 +111,7 @@ def upload_file_in_chunks(file_path, upload_server_url="http://127.0.0.1:8000"):
     init_resp = requests.post(
         f"{upload_server_url}/upload/init",
         data={"filename": filename, "file_size": file_size},
+        timeout=30,
     )
     init_resp.raise_for_status()
     info = init_resp.json()
@@ -127,6 +129,7 @@ def upload_file_in_chunks(file_path, upload_server_url="http://127.0.0.1:8000"):
                 f"{upload_server_url}/upload/chunk",
                 data={"upload_id": upload_id, "chunk_index": idx},
                 files={"chunk": (f"chunk_{idx}", chunk_data)},
+                timeout=300,
             )
             resp.raise_for_status()
             progress_bar.progress((idx + 1) / total_chunks)
@@ -135,6 +138,7 @@ def upload_file_in_chunks(file_path, upload_server_url="http://127.0.0.1:8000"):
     complete_resp = requests.post(
         f"{upload_server_url}/upload/complete",
         data={"upload_id": upload_id, "filename": filename, "total_chunks": total_chunks},
+        timeout=300,
     )
     complete_resp.raise_for_status()
     progress_bar.progress(1.0)
@@ -269,6 +273,25 @@ def validate_sql(sql: str, allowed_cols: set[str]) -> tuple[bool, str]:
 
 
 # =====================================
+# 결과 행수 상한
+# =====================================
+
+MAX_RESULT_ROWS = 5000
+
+
+def _apply_row_limit(sql: str, max_rows: int = MAX_RESULT_ROWS) -> tuple[str, bool]:
+    """
+    수십 GB 규모 데이터에서 LIMIT 없는 쿼리가 결과를 통째로 끌고 오지
+    않도록 상한을 강제한다. 이미 LIMIT이 있으면 그대로 둔다.
+    반환: (실행할 SQL, 상한을 새로 적용했는지 여부)
+    """
+    s = sql.strip().rstrip(";").strip()
+    if re.search(r"\bLIMIT\s+\d+\b", s, re.IGNORECASE):
+        return s, False
+    return f"{s} LIMIT {max_rows}", True
+
+
+# =====================================
 # SQL 생성 (Claude API)
 # =====================================
 
@@ -289,11 +312,14 @@ def _build_sql_prompt(question: str, schema: str) -> str:
 
 1. 위 스키마에 존재하는 컬럼만 사용한다.
 2. 테이블명은 반드시 nand_health 만 사용한다.
-3. SELECT 문 하나만 출력한다.
+3. SELECT 문 하나만 만든다.
 4. DROP, DELETE, UPDATE, INSERT, ALTER, CREATE 등은 절대 사용하지 않는다.
 5. 질문에 없는 조건을 임의로 추가하지 않는다.
-6. Markdown 코드 블록(```sql)을 사용하지 않는다.
-7. SQL 설명문을 포함하지 않는다.
+6. 다음 함수만 사용할 수 있다: COUNT, AVG, SUM, MAX, MIN, ROUND, COALESCE,
+   CAST, NULLIF, IFNULL, STRFTIME, DATE, YEAR, MONTH, DAY, UPPER, LOWER,
+   TRIM, LENGTH. 이 목록에 없는 함수는 사용하지 않는다.
+7. 결과 컬럼에 별칭(AS)을 붙일 때는 원본 컬럼명 대신 의미가 드러나는
+   이름을 쓴다 (예: COUNT(*) AS cnt).
 
 조건 표현:
   "이상" → >=   "초과" → >   "이하" → <=   "미만" → <
@@ -313,43 +339,100 @@ def _build_sql_prompt(question: str, schema: str) -> str:
 모호한 질문 (구체적 수치 기준 없이 "고장", "불량", "위험" 등만 있는 경우):
   SELECT '질문의 기준이 명확하지 않습니다.' AS message;
 
-SQL:
+==================================================
+차트 힌트
+==================================================
+
+SQL 결과를 함께 시각화할 수 있는지 판단해서 chart 정보도 만든다.
+
+- 결과가 "카테고리별 집계"처럼 x축(범주/시간)과 y축(숫자) 조합으로
+  의미가 있으면 chart를 채운다. type은 다음 중 하나:
+    "bar"  — 카테고리별 비교
+    "line" — 시간/순서에 따른 추이
+    "pie"  — 전체 대비 비율 (카테고리 5개 이하일 때만)
+- x, y 값은 반드시 SELECT 절에 실제로 나오는 컬럼명(또는 AS 별칭)과
+  정확히 같은 문자열이어야 한다.
+- 단일 값 하나만 반환되는 쿼리, 메시지만 반환하는 쿼리, 또는 의미 있는
+  x/y 조합이 없는 쿼리는 chart를 null로 둔다.
+
+==================================================
+출력 형식
+==================================================
+
+아래 형식의 JSON 객체 하나만 출력한다. 그 외 어떤 텍스트, 설명,
+마크다운 코드 블록도 포함하지 않는다.
+
+{{"sql": "<SELECT 문>", "chart": {{"type": "bar", "x": "<컬럼명>", "y": "<컬럼명>"}} 또는 null}}
 """
 
 
-def generate_sql(question: str, schema: str) -> str:
-    """자연어 질문을 nand_health 테이블에 대한 SELECT SQL 문 하나로 변환한다."""
+def generate_sql_and_chart(question: str, schema: str) -> dict:
+    """
+    자연어 질문을 nand_health 테이블에 대한 SELECT SQL 문과 차트 힌트로 변환한다.
+    반환: {"sql": str, "chart": dict | None}
+    """
     response = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=1024,
-        system="너는 정확한 SQL을 생성하는 데이터 분석 전문가다.",
+        system=(
+            "너는 정확한 SQL과 시각화 힌트를 생성하는 데이터 분석 전문가다. "
+            "반드시 순수 JSON 객체 하나만 출력한다."
+        ),
         messages=[{"role": "user", "content": _build_sql_prompt(question, schema)}],
     )
-    sql = response.content[0].text.strip()
-    sql = re.sub(r"```sql|```", "", sql).strip()
-    return sql
+    raw = response.content[0].text.strip()
+    raw = re.sub(r"```json|```", "", raw).strip()
+
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        # JSON 파싱에 실패하면 통짜 텍스트를 SQL로 간주하고 차트는 포기한다.
+        return {"sql": raw, "chart": None}
+
+    sql = str(parsed.get("sql", "")).strip()
+    chart = parsed.get("chart")
+    if not isinstance(chart, dict):
+        chart = None
+    return {"sql": sql, "chart": chart}
 
 
 # =====================================
 # 결과 요약 (Claude API)
 # =====================================
 
+SUMMARY_PREVIEW_ROWS = 30
+
+
 def summarize_result(question: str, result: pl.DataFrame) -> str:
-    """SQL 실행 결과를 한국어 한두 문장으로 요약한다."""
+    """
+    SQL 실행 결과를 한국어 한두 문장으로 요약한다.
+    결과가 클 수 있으므로 프롬프트에는 앞부분 일부만 미리보기로 넣는다.
+    """
+    total_rows = len(result)
+    truncated = total_rows > SUMMARY_PREVIEW_ROWS
+    preview = result.head(SUMMARY_PREVIEW_ROWS) if truncated else result
+
+    preview_note = (
+        f"(전체 {total_rows:,}행 중 앞 {SUMMARY_PREVIEW_ROWS}행 미리보기)"
+        if truncated
+        else ""
+    )
+
     prompt = f"""
 너는 데이터 분석 결과를 쉽게 설명하는 전문가다.
 
 사용자 질문:
 {question}
 
-SQL 실행 결과:
-{result}
+SQL 실행 결과 {preview_note}:
+{preview}
 
 규칙:
 1. 한국어로 한두 문장으로 요약한다.
 2. 숫자는 천 단위 쉼표를 사용한다.
 3. 결과에 없는 내용은 추측하지 않는다.
 4. 결과가 "질문의 기준이 명확하지 않습니다."라면 기준이 명확하지 않아 분석할 수 없다고 설명한다.
+5. 미리보기라고 표시되어 있다면, 전체 {total_rows:,}행 중 일부만 보고 있다는 점을 감안해서 설명한다.
 
 요약:
 """
@@ -377,7 +460,7 @@ def answer_question(con, question: str) -> dict:
         "recognized_columns": list,  # 결과 컬럼 목록
         "sql": str,                  # 생성된 SQL
         "validation": str,           # 검증 결과
-        "chart": dict,               # 시각화 힌트 (현재는 빈 dict)
+        "chart": dict,               # 시각화 힌트 {"type","x","y"} 또는 빈 dict
     }
     """
     # 1. 현재 업로드된 파일의 스키마를 동적으로 읽기
@@ -394,8 +477,10 @@ def answer_question(con, question: str) -> dict:
             "chart": {},
         }
 
-    # 2. SQL 생성
-    sql = generate_sql(question, schema_str)
+    # 2. SQL + 차트 힌트 생성
+    generated = generate_sql_and_chart(question, schema_str)
+    sql = generated["sql"]
+    chart_hint = generated["chart"]
 
     # 3. SQL 검증 (동적 컬럼 기반)
     is_valid, error_message = validate_sql(sql, allowed_cols)
@@ -410,9 +495,11 @@ def answer_question(con, question: str) -> dict:
             "chart": {},
         }
 
-    # 4. SQL 실행
+    # 4. 결과 행수 상한 적용 후 실행
+    #    (수십 GB 규모 파일에서 LIMIT 없는 쿼리가 전체를 끌고 오지 않도록 방지)
+    exec_sql, limit_applied = _apply_row_limit(sql)
     try:
-        result = con.execute(sql).pl()
+        result = con.execute(exec_sql).pl()
     except Exception as e:
         return {
             "answer": "SQL 실행 중 오류가 발생했습니다.",
@@ -424,8 +511,25 @@ def answer_question(con, question: str) -> dict:
             "chart": {},
         }
 
-    # 5. 결과 요약
+    # 5. 차트 힌트를 실제 결과 컬럼과 대조해서 검증
+    chart: dict = {}
+    if chart_hint:
+        chart_type = chart_hint.get("type")
+        chart_x = chart_hint.get("x")
+        chart_y = chart_hint.get("y")
+        if (
+            chart_type in {"bar", "line", "pie"}
+            and chart_x in result.columns
+            and chart_y in result.columns
+        ):
+            chart = {"type": chart_type, "x": chart_x, "y": chart_y}
+
+    # 6. 결과 요약
     summary = summarize_result(question, result)
+
+    validation_msg = "통과"
+    if limit_applied and len(result) >= MAX_RESULT_ROWS:
+        validation_msg += f" (결과가 많아 상위 {MAX_RESULT_ROWS:,}행만 조회됨)"
 
     return {
         "answer": summary,
@@ -433,6 +537,6 @@ def answer_question(con, question: str) -> dict:
         "table": ALLOWED_TABLE,
         "recognized_columns": result.columns,
         "sql": sql,
-        "validation": "통과",
-        "chart": {},
+        "validation": validation_msg,
+        "chart": chart,
     }

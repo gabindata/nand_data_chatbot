@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import os
 import sys
 import time
 from pathlib import Path
@@ -13,7 +14,122 @@ from PIL import Image
 
 # llm_sql 모듈 경로 추가
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "llm_sql"))
-from app import get_duckdb_connection, load_into_duckdb, answer_question
+from app import (
+    get_duckdb_connection,
+    load_into_duckdb,
+    connect_latest_parquet,
+    answer_question,
+)
+
+# 대용량 파일은 브라우저가 이 주소의 FastAPI 서버로 직접 청크 업로드한다.
+UPLOAD_SERVER_URL = os.environ.get("UPLOAD_SERVER_URL", "http://127.0.0.1:8000")
+
+
+_CHUNK_UPLOADER_TEMPLATE = """
+<div style="font-family: -apple-system, sans-serif; font-size: 13px;">
+  <input type="file" id="sunnyFileInput" accept=".csv"
+         style="width: 100%; margin-bottom: 8px;" />
+  <button id="sunnyUploadBtn"
+          style="width: 100%; padding: 8px; border-radius: 8px;
+                 border: 1px solid #8bbed5; background: #fff; cursor: pointer;">
+    업로드 시작
+  </button>
+  <div style="margin-top: 8px;">
+    <progress id="sunnyProgress" value="0" max="100" style="width: 100%;"></progress>
+    <div id="sunnyStatus" style="color: #4a6b78; margin-top: 4px;">파일을 선택하세요.</div>
+  </div>
+</div>
+<script>
+const SERVER_URL = "__SERVER_URL__";
+
+document.getElementById("sunnyUploadBtn").addEventListener("click", async () => {
+  const fileInput = document.getElementById("sunnyFileInput");
+  const file = fileInput.files[0];
+  const status = document.getElementById("sunnyStatus");
+  const progressBar = document.getElementById("sunnyProgress");
+
+  if (!file) {
+    status.innerText = "파일을 먼저 선택하세요.";
+    return;
+  }
+  if (!file.name.toLowerCase().endsWith(".csv")) {
+    status.innerText = "CSV 파일만 업로드할 수 있습니다.";
+    return;
+  }
+
+  status.innerText = "업로드 초기화 중...";
+
+  const initData = new FormData();
+  initData.append("filename", file.name);
+  initData.append("file_size", file.size);
+
+  let initResponse;
+  try {
+    initResponse = await fetch(SERVER_URL + "/upload/init", { method: "POST", body: initData });
+  } catch (error) {
+    status.innerText = "FastAPI 서버(" + SERVER_URL + ")에 연결할 수 없습니다.";
+    return;
+  }
+
+  if (!initResponse.ok) {
+    status.innerText = "업로드 초기화 실패";
+    return;
+  }
+
+  const uploadInfo = await initResponse.json();
+  const uploadId = uploadInfo.upload_id;
+  const totalChunks = uploadInfo.total_chunks;
+  const chunkSize = uploadInfo.chunk_size;
+
+  for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+    const start = chunkIndex * chunkSize;
+    const end = Math.min(start + chunkSize, file.size);
+    const chunk = file.slice(start, end);
+
+    const chunkData = new FormData();
+    chunkData.append("upload_id", uploadId);
+    chunkData.append("chunk_index", chunkIndex);
+    chunkData.append("chunk", chunk, "chunk_" + chunkIndex);
+
+    try {
+      const chunkResp = await fetch(SERVER_URL + "/upload/chunk", { method: "POST", body: chunkData });
+      if (!chunkResp.ok) {
+        status.innerText = (chunkIndex + 1) + "번째 청크 업로드 실패";
+        return;
+      }
+    } catch (error) {
+      status.innerText = "업로드 중 연결이 끊어졌습니다.";
+      return;
+    }
+
+    const progress = ((chunkIndex + 1) / totalChunks) * 100;
+    progressBar.value = progress;
+    status.innerText = "업로드 중... " + (chunkIndex + 1) + " / " + totalChunks + " 청크";
+  }
+
+  const completeData = new FormData();
+  completeData.append("upload_id", uploadId);
+  completeData.append("filename", file.name);
+  completeData.append("total_chunks", totalChunks);
+
+  const completeResponse = await fetch(SERVER_URL + "/upload/complete", { method: "POST", body: completeData });
+  if (!completeResponse.ok) {
+    status.innerText = "업로드 완료 처리 실패 (CSV → Parquet 변환 오류일 수 있음)";
+    return;
+  }
+
+  progressBar.value = 100;
+  status.innerText = "업로드 완료! 아래 '업로드한 데이터 불러오기' 버튼을 눌러주세요.";
+});
+</script>
+"""
+
+
+def build_chunk_uploader_html(server_url: str) -> str:
+    """브라우저가 Streamlit 서버를 거치지 않고 FastAPI 서버로 직접
+    청크 업로드하는 컴포넌트. 대용량(수십 GB) 파일이 Streamlit 프로세스
+    메모리를 거치지 않도록 하기 위함이다."""
+    return _CHUNK_UPLOADER_TEMPLATE.replace("__SERVER_URL__", server_url)
 
 
 # ---------------------------------------------------------
@@ -377,6 +493,11 @@ with st.sidebar:
     )
 
     if uploaded_file is not None:
+        if uploaded_file.size > 500 * 1024 * 1024:
+            st.warning(
+                "500MB가 넘는 파일은 메모리 사용량이 커서 느리거나 실패할 수 "
+                "있습니다. 아래 '대용량 파일 업로드'를 이용해 주세요."
+            )
         with st.spinner("데이터 로드 중..."):
             try:
                 row_count = load_into_duckdb(st.session_state.con, uploaded_file)
@@ -404,6 +525,29 @@ with st.sidebar:
         )
     else:
         st.caption("파일을 업로드하면 질문할 수 있습니다.")
+
+    st.markdown("---")
+    with st.expander("대용량 파일 업로드 (10GB+)"):
+        st.caption(
+            "브라우저가 Streamlit을 거치지 않고 아래 서버로 직접 파일을 "
+            "전송합니다. 먼저 backend 서버를 실행해 주세요:"
+        )
+        st.code("uvicorn backend.upload_server:app --port 8000", language="bash")
+        st.iframe(build_chunk_uploader_html(UPLOAD_SERVER_URL), height=150)
+
+        if st.button("업로드한 데이터 불러오기", use_container_width=True):
+            with st.spinner("최근 업로드된 데이터를 연결하는 중..."):
+                try:
+                    connect_latest_parquet(st.session_state.con, UPLOAD_SERVER_URL)
+                    row_count = st.session_state.con.execute(
+                        "SELECT COUNT(*) FROM nand_health"
+                    ).fetchone()[0]
+                    st.session_state.data_loaded = True
+                    st.session_state.row_count = row_count
+                    st.session_state.messages = []
+                    st.success(f"연결 완료: 총 {row_count:,}행")
+                except Exception as e:
+                    st.error(f"연결 실패: {e}")
 
     st.markdown("---")
     st.caption("SUNNY 9조 · v1.0")
