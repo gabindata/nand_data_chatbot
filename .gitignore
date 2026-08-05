@@ -14,3 +14,6 @@ nand_health_300mb.xlsx
 upload_info.json
 uploaded_nand_health.csv
 uploaded_nand_health.parquet
+
+# 정확도 평가 실행 결과 (매번 새로 생성됨, 코드만 커밋)
+tests/accuracy/results/
