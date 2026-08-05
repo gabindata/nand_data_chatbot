@@ -471,6 +471,14 @@ st.markdown(
         border-color: var(--sunny-red) !important;
     }}
 
+    /* Streamlit 기본 테마가 안쪽 div에도 포커스 시 자체 테두리(테마
+       primaryColor)를 그리는데, 바깥 컨테이너보다 살짝 작은 크기에
+       같은 border-radius를 써서 두 겹 테두리의 곡률이 어긋나 보인다.
+       바깥 테두리 하나만 보이도록 안쪽 테두리는 항상 투명 처리한다. */
+    [data-testid="stChatInput"] > div {{
+        border-color: transparent !important;
+    }}
+
     /* 어시스턴트 답변 요약 텍스트를 담는 박스. 블러 없이 단색 배경 +
        회색 테두리로 눈에 띄게 감싼다. */
     .answer-summary {{
@@ -554,57 +562,6 @@ st.markdown(
     </style>
     """,
     unsafe_allow_html=True,
-)
-
-
-# ---------------------------------------------------------
-# 결과 영역 자동 스크롤
-# 입력창은 이제 CSS(flex 레이아웃)만으로 항상 화면 맨 아래에 고정되고,
-# 결과 영역(.block-container)은 그 위에서 독립적으로 스크롤된다.
-# 새 메시지가 추가될 때마다 결과 영역을 맨 아래로 자동 스크롤해서
-# 사용자가 매번 손으로 내리지 않아도 최신 답변이 입력창 바로 위에 보이게 한다.
-# 물론 사용자는 언제든 위로 스크롤해서 이전 결과를 자유롭게 볼 수 있다.
-# ---------------------------------------------------------
-components.html(
-    """
-    <script>
-    (function () {
-        const doc = window.parent.document;
-
-        function findScrollArea() {
-            return doc.querySelector('.block-container');
-        }
-
-        function scrollToBottom() {
-            const el = findScrollArea();
-            if (!el) return;
-            el.scrollTop = el.scrollHeight;
-        }
-
-        function attach() {
-            const el = findScrollArea();
-            if (!el) {
-                setTimeout(attach, 200);
-                return;
-            }
-
-            // 최초 렌더링 및 스트림릿 재실행(rerun) 직후 맨 아래로 스크롤
-            scrollToBottom();
-
-            // 새 메시지/차트/표 등이 추가되어 콘텐츠 높이가 바뀔 때마다
-            // 다시 맨 아래로 스크롤한다.
-            const resizeObserver = new ResizeObserver(scrollToBottom);
-            resizeObserver.observe(el);
-
-            const mutationObserver = new MutationObserver(scrollToBottom);
-            mutationObserver.observe(el, { childList: true, subtree: true });
-        }
-
-        attach();
-    })();
-    </script>
-    """,
-    height=0,
 )
 
 
@@ -990,3 +947,26 @@ if prompt:
 
         render_assistant_message(assistant_message)
         st.session_state.messages.append(assistant_message)
+
+        # 새 메시지가 실제로 추가된 이번 rerun에서만 맨 아래로 스크롤한다.
+        # (탭/펼치기 클릭처럼 새 메시지 없이 rerun되는 경우까지 계속
+        # 지켜보다가 스크롤을 채가면, 위로 스크롤해서 예전 메시지의
+        # 탭/펼치기를 클릭할 때마다 화면이 도로 아래로 튕기게 된다.)
+        components.html(
+            """
+            <script>
+            (function () {
+                const doc = window.parent.document;
+                function scrollToBottom() {
+                    const el = doc.querySelector('.block-container');
+                    if (el) el.scrollTop = el.scrollHeight;
+                }
+                scrollToBottom();
+                // 이미지/폰트 등으로 레이아웃이 뒤늦게 자리잡는 경우를 대비해
+                // 한 번 더 시도한다. (계속 지켜보는 옵저버는 두지 않는다.)
+                setTimeout(scrollToBottom, 150);
+            })();
+            </script>
+            """,
+            height=0,
+        )
