@@ -345,7 +345,11 @@ def _build_sql_prompt(question: str, schema: str) -> str:
 ==================================================
 
 1. 위 스키마에 존재하는 컬럼만 사용한다.
-2. 테이블명은 반드시 nand_health 만 사용한다.
+2. 테이블명은 반드시 nand_health 만 사용한다. 조회 대상이 이 테이블
+   하나뿐이므로 테이블에 별칭(alias)을 붙이지 않는다 (예:
+   "FROM nand_health nh"나 "FROM nand_health AS nh"처럼 쓰지 말고
+   항상 "FROM nand_health"라고만 쓴다). 컬럼을 쓸 때도
+   "nand_health.컬럼"이 아니라 컬럼명만 그대로 쓴다.
 3. SELECT 문 하나만 만든다.
 4. DROP, DELETE, UPDATE, INSERT, ALTER, CREATE 등은 절대 사용하지 않는다.
 5. 질문에 없는 조건을 임의로 추가하지 않는다.
