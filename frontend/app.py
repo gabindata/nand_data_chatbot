@@ -21,6 +21,7 @@ from app import (
     load_into_duckdb,
     connect_latest_parquet,
     answer_question,
+    suggest_questions,
 )
 from spec_store import (
     add_spec,
@@ -716,6 +717,15 @@ if "data_loaded" not in st.session_state:
 if "row_count" not in st.session_state:
     st.session_state.row_count = 0
 
+# 추천 질문은 업로드된 파일의 컬럼에 따라 달라지므로 파일을 새로 올릴 때마다
+# 다시 만든다. (고정 질문을 두면 컬럼이 다른 파일에서 전부 헛질문이 된다)
+if "suggested_questions" not in st.session_state:
+    st.session_state.suggested_questions = []
+
+# 답변이 새로 추가된 직후 한 번만 맨 아래로 스크롤하기 위한 플래그
+if "scroll_to_bottom" not in st.session_state:
+    st.session_state.scroll_to_bottom = False
+
 # 질의 명세서 — 파일에 영구 저장되므로 세션 시작 시 한 번 읽어온다.
 if "specs" not in st.session_state:
     st.session_state.specs = load_specs()
@@ -798,6 +808,9 @@ with st.sidebar:
                 st.session_state.data_loaded = True
                 st.session_state.row_count = row_count
                 st.session_state.messages = []
+                st.session_state.suggested_questions = suggest_questions(
+                    st.session_state.con
+                )
             except Exception as e:
                 st.error(f"파일 로드 실패: {e}")
 
@@ -839,6 +852,9 @@ with st.sidebar:
                     st.session_state.data_loaded = True
                     st.session_state.row_count = row_count
                     st.session_state.messages = []
+                    st.session_state.suggested_questions = suggest_questions(
+                        st.session_state.con
+                    )
                     st.success(f"연결 완료: 총 {row_count:,}행")
                 except Exception as e:
                     st.error(f"연결 실패: {e}")
@@ -1124,23 +1140,19 @@ with main_col:
             unsafe_allow_html=True,
         )
 
-        st.markdown('<div class="quick-title">추천 질문</div>', unsafe_allow_html=True)
-        q1, q2, q3 = st.columns(3)
-
-        with q1:
-            if st.button("제품군별 LVD 불량 건수", use_container_width=True):
-                st.session_state.pending_prompt = "제품군별 LVD 불량 건수를 보여줘"
-                st.rerun()
-
-        with q2:
-            if st.button("월별 불량 추이", use_container_width=True):
-                st.session_state.pending_prompt = "월별 불량 건수 추이를 보여줘"
-                st.rerun()
-
-        with q3:
-            if st.button("공정별 불량률 비교", use_container_width=True):
-                st.session_state.pending_prompt = "공정별 불량률을 비교해줘"
-                st.rerun()
+        # 추천 질문은 업로드된 파일의 실제 컬럼에서 만들어진다. 데이터가 없거나
+        # 생성에 실패했으면 헛질문을 보여주느니 아예 표시하지 않는다.
+        suggestions = st.session_state.suggested_questions
+        if st.session_state.data_loaded and suggestions:
+            st.markdown(
+                '<div class="quick-title">이 데이터로 물어볼 만한 질문</div>',
+                unsafe_allow_html=True,
+            )
+            for column, question in zip(st.columns(len(suggestions)), suggestions):
+                with column:
+                    if st.button(question, use_container_width=True, key=f"sg_{question}"):
+                        st.session_state.pending_prompt = question
+                        st.rerun()
 
     for message in st.session_state.messages:
         avatar = sunny_avatar if message["role"] == "assistant" else "👤"
@@ -1243,32 +1255,34 @@ with main_col:
                     },
                 }
 
-            render_assistant_message(assistant_message)
             st.session_state.messages.append(assistant_message)
 
-            # 새 메시지가 실제로 추가된 이번 rerun에서만 맨 아래로 스크롤한다.
-            # (탭/펼치기 클릭처럼 새 메시지 없이 rerun되는 경우까지 계속
-            # 지켜보다가 스크롤을 채가면, 위로 스크롤해서 예전 메시지의
-            # 탭/펼치기를 클릭할 때마다 화면이 도로 아래로 튕기게 된다.)
-            components.html(
-                """
-                <script>
-                (function () {
-                    const doc = window.parent.document;
-                    function scrollToBottom() {
-                        const el = doc.querySelector('.block-container');
-                        if (el) el.scrollTop = el.scrollHeight;
-                    }
-                    scrollToBottom();
-                    // 이미지/폰트 등으로 레이아웃이 뒤늦게 자리잡는 경우를 대비해
-                    // 한 번 더 시도한다. (계속 지켜보는 옵저버는 두지 않는다.)
-                    setTimeout(scrollToBottom, 150);
-                })();
-                </script>
-                """,
-                height=0,
-            )
+        # 사이드바("최근 대화")와 명세서 패널은 이 지점보다 위에서 이미 그려졌기
+        # 때문에, 방금 추가한 메시지는 지금 화면에 반영되지 않는다. 다시 그려서
+        # 대화 목록·명세 개수가 곧바로 최신 상태가 되게 한다.
+        st.session_state.scroll_to_bottom = True
+        st.rerun()
 
-        # 명세가 새로 추가됐다면 패널/카운트를 즉시 반영하기 위해 다시 그린다.
-        if spec_saved is not None:
-            st.rerun()
+    # 답변이 새로 추가된 직후에만 맨 아래로 스크롤한다. (탭/펼치기 클릭처럼
+    # 새 메시지 없이 다시 그려지는 경우에도 스크롤을 채가면, 위로 올려서
+    # 예전 답변을 볼 때마다 화면이 도로 아래로 튕긴다.)
+    if st.session_state.scroll_to_bottom:
+        st.session_state.scroll_to_bottom = False
+        components.html(
+            """
+            <script>
+            (function () {
+                const doc = window.parent.document;
+                function scrollToBottom() {
+                    const el = doc.querySelector('.block-container');
+                    if (el) el.scrollTop = el.scrollHeight;
+                }
+                scrollToBottom();
+                // 이미지/폰트 등으로 레이아웃이 뒤늦게 자리잡는 경우를 대비해
+                // 한 번 더 시도한다. (계속 지켜보는 옵저버는 두지 않는다.)
+                setTimeout(scrollToBottom, 150);
+            })();
+            </script>
+            """,
+            height=0,
+        )

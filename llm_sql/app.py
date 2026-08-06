@@ -490,6 +490,83 @@ def generate_sql_and_chart(question: str, schema: str, spec_text: str = "") -> d
 
 
 # =====================================
+# 추천 질문 생성 (Claude API)
+# =====================================
+
+def _fallback_questions(con, count: int) -> list[str]:
+    """
+    Claude 호출이 실패했을 때 쓰는 대비책. 어떤 파일이든 컬럼 이름만
+    알면 만들 수 있는 질문이라 특정 도메인에 의존하지 않는다.
+    """
+    try:
+        rows = con.execute("DESCRIBE nand_health").fetchall()
+    except Exception:
+        return []
+
+    numeric_types = ("INT", "DOUBLE", "FLOAT", "DECIMAL", "BIGINT")
+    text_cols = [r[0] for r in rows if not any(t in r[1].upper() for t in numeric_types)]
+    num_cols = [r[0] for r in rows if any(t in r[1].upper() for t in numeric_types)]
+
+    questions = ["전체 데이터가 몇 건이야?"]
+    if text_cols:
+        questions.append(f"{text_cols[0]}별 개수를 보여줘")
+    if num_cols:
+        questions.append(f"{num_cols[0]}의 평균은 얼마야?")
+    if len(num_cols) > 1:
+        questions.append(f"{num_cols[1]}이 가장 큰 상위 10건을 보여줘")
+
+    return questions[:count]
+
+
+def suggest_questions(con, count: int = 3) -> list[str]:
+    """
+    현재 업로드된 파일의 실제 컬럼을 보고 물어볼 만한 질문을 만든다.
+    파일마다 컬럼이 달라지므로 추천 질문도 매번 새로 생성해야 한다.
+    실패하면 컬럼 이름만으로 만든 기본 질문으로 대체한다.
+    """
+    try:
+        schema_str, _ = get_schema(con)
+    except Exception:
+        return []
+
+    prompt = f"""
+아래는 사용자가 방금 업로드한 데이터의 실제 스키마다.
+
+{schema_str}
+
+이 데이터에 대해 물어볼 만한 한국어 질문을 {count}개 만들어라.
+
+규칙:
+1. 반드시 위 스키마에 실제로 있는 컬럼만 사용한다. 없는 개념을 지어내지 않는다.
+2. 집계/그룹/정렬처럼 SQL로 바로 답할 수 있는 질문으로 만든다.
+3. "불량", "위험"처럼 기준이 모호한 표현은 쓰지 않는다.
+4. 각 질문은 25자 이내로 짧게 쓴다.
+5. 서로 다른 컬럼과 다른 유형(개수/평균/순위 등)을 다룬다.
+
+문자열 배열 형태의 JSON 하나만 출력한다. 다른 텍스트는 넣지 않는다.
+예: ["질문1", "질문2", "질문3"]
+"""
+
+    try:
+        response = client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=512,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = _extract_text(response).strip()
+        raw = re.sub(r"```json|```", "", raw).strip()
+        parsed = json.loads(raw)
+        questions = [str(q).strip() for q in parsed if str(q).strip()]
+        if questions:
+            return questions[:count]
+    except Exception:
+        # 추천 질문은 부가 기능이라, 실패해도 챗봇 자체는 쓸 수 있어야 한다.
+        pass
+
+    return _fallback_questions(con, count)
+
+
+# =====================================
 # 결과 요약 (Claude API)
 # =====================================
 
