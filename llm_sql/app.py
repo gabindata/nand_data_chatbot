@@ -249,14 +249,24 @@ def validate_sql(sql: str, allowed_cols: set[str]) -> tuple[bool, str]:
         if table.lower() != ALLOWED_TABLE:
             return False, f"허용되지 않은 테이블입니다: {table}"
 
+    # 큰따옴표로 감싼 식별자(공백/특수문자가 있는 컬럼명, 예: "Unnamed: 0")는
+    # 통째로 하나의 토큰으로 검사한다. 그렇지 않으면 아래 단어 단위
+    # 토큰화가 따옴표 안 일부만 뽑아내(예: "Unnamed") 실제로는 허용된
+    # 컬럼을 존재하지 않는 컬럼으로 오인해 차단하게 된다.
+    quoted_identifiers = re.findall(r'"([^"]+)"', sql_for_check)
+    for identifier in quoted_identifiers:
+        if identifier.lower() not in allowed_cols:
+            return False, f"허용되지 않은 컬럼 또는 식별자입니다: {identifier}"
+    sql_without_quoted = re.sub(r'"[^"]+"', " ", sql_for_check)
+
     # 컬럼 검사 — 동적 화이트리스트
     aliases = {
         a.upper()
         for a in re.findall(
-            r"\bAS\s+([a-zA-Z_][a-zA-Z0-9_]*)", sql_for_check, re.IGNORECASE
+            r"\bAS\s+([a-zA-Z_][a-zA-Z0-9_]*)", sql_without_quoted, re.IGNORECASE
         )
     }
-    tokens = re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", sql_for_check)
+    tokens = re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", sql_without_quoted)
 
     for token in tokens:
         token_upper = token.upper()
@@ -367,12 +377,16 @@ def _build_sql_prompt(question: str, schema: str, spec_text: str = "") -> str:
 규칙
 ==================================================
 
-1. 위 스키마에 존재하는 컬럼만 사용한다.
+1. 위 스키마에 존재하는 컬럼만 사용한다. 컬럼명 대소문자는 스키마에 적힌
+   그대로 정확히 맞춰 쓴다("price"가 아니라 스키마에 있는 대로 "PRICE").
 2. 테이블명은 반드시 uploaded_data 만 사용한다. 조회 대상이 이 테이블
    하나뿐이므로 테이블에 별칭(alias)을 붙이지 않는다 (예:
    "FROM uploaded_data nh"나 "FROM uploaded_data AS nh"처럼 쓰지 말고
    항상 "FROM uploaded_data"라고만 쓴다). 컬럼을 쓸 때도
    "uploaded_data.컬럼"이 아니라 컬럼명만 그대로 쓴다.
+2-1. 컬럼명에 공백이나 특수문자, 콜론 등이 포함되어 있으면(예: "Unnamed: 0")
+   반드시 큰따옴표로 감싸서 쓴다(예: "Unnamed: 0"). 큰따옴표 없이 그대로
+   쓰면 SQL 문법 오류가 난다.
 3. SELECT 문 하나만 만든다.
 4. DROP, DELETE, UPDATE, INSERT, ALTER, CREATE 등은 절대 사용하지 않는다.
 5. 질문에 없는 조건을 임의로 추가하지 않는다.
@@ -641,7 +655,7 @@ def summarize_result(
 {question}
 
 SQL 실행 결과 {preview_note}:
-{json.dumps(preview.to_dicts(), ensure_ascii=False)}
+{json.dumps(preview.to_dicts(), ensure_ascii=False, default=str)}
 
 규칙:
 1. 한국어로 한두 문장으로 요약한다.

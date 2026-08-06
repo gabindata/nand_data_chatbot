@@ -198,7 +198,7 @@ BACKGROUND_PATH = BASE_DIR / "assets" / "sunny_bg.png"
 AVATAR_PATH = BASE_DIR / "assets" / "sunny_avatar.png"
 
 st.set_page_config(
-    page_title="써니 9조 데이터 챗봇",
+    page_title="써니9조 데이터 챗봇",
     page_icon="☀️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -780,7 +780,7 @@ with st.sidebar:
     with col_name:
         st.markdown(
             """
-            <p class="brand-title">써니 9조</p>
+            <p class="brand-title">써니9조</p>
             <p class="brand-subtitle">데이터 분석 챗봇</p>
             """,
             unsafe_allow_html=True,
@@ -930,7 +930,7 @@ with st.sidebar:
                     st.error(f"연결 실패: {e}")
 
     st.markdown("---")
-    st.caption("써니 9조 · v1.0")
+    st.caption("써니9조 · v1.0")
 
 
 def render_chart(df: pd.DataFrame, chart: dict[str, str]) -> None:
