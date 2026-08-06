@@ -763,7 +763,7 @@ with st.sidebar:
             """
             <p class="brand-kicker">SUNNY 9 TEAM</p>
             <p class="brand-title">SUNNY 9조</p>
-            <p class="brand-subtitle">품질 데이터 분석 챗봇</p>
+            <p class="brand-subtitle">데이터 분석 챗봇</p>
             """,
             unsafe_allow_html=True,
         )
@@ -1091,7 +1091,7 @@ with hero_col:
             <div class="{hero_badge_class}">{hero_badge_text}</div>
             <h1 class="hero-title">SUNNY 데이터 챗봇</h1>
             <p class="hero-description">
-                품질 데이터를 자연어로 검색하고, 조회 결과를 표와 그래프로 확인하세요.
+                CSV 데이터를 자연어로 검색하고, 조회 결과를 표와 그래프로 확인하세요.
             </p>
         </section>
         """,
@@ -1115,7 +1115,7 @@ else:
     main_col = st.container()
 
 # 채팅 입력창은 화면 맨 아래 고정 영역이라 컬럼 밖(최상위)에서 만들어야 한다.
-typed_prompt = st.chat_input("품질 데이터에 대해 질문해 주세요.")
+typed_prompt = st.chat_input("업로드한 데이터에 대해 질문해 주세요.")
 prompt = st.session_state.pending_prompt or typed_prompt
 
 with main_col:
