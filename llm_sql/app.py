@@ -1,15 +1,15 @@
 """
-NAND Health 챗봇의 AI+SQL 로직 모듈.
+업로드 데이터 챗봇의 AI+SQL 로직 모듈.
 
 컬럼이 매번 달라지는 파일을 처리하기 위해 스키마를 하드코딩하지 않고
 파일이 로드된 DuckDB 뷰에서 동적으로 읽는다.
 
 제공 함수:
 - get_duckdb_connection(): DuckDB 커넥션 생성
-- load_into_duckdb(con, file): CSV/Parquet 파일을 nand_health 뷰로 등록
+- load_into_duckdb(con, file): CSV/Parquet 파일을 uploaded_data 뷰로 등록
 - connect_latest_parquet(con, url): backend 서버의 최신 parquet을 뷰로 연결
 - upload_file_in_chunks(file_path, url): 대용량 파일을 청크 업로드
-- get_schema(con): 현재 nand_health 뷰의 컬럼 목록과 타입을 반환
+- get_schema(con): 현재 uploaded_data 뷰의 컬럼 목록과 타입을 반환
 - answer_question(con, question): 자연어 → SQL 생성 → 검증 → 실행 → 요약
 """
 
@@ -57,18 +57,18 @@ def get_duckdb_connection():
 def load_into_duckdb(con, file) -> int:
     """
     CSV 또는 Parquet 파일(경로 문자열 또는 파일 객체)을
-    nand_health 뷰로 등록한다. 반환값은 로드된 행 수.
+    uploaded_data 뷰로 등록한다. 반환값은 로드된 행 수.
     """
     if isinstance(file, (str, os.PathLike)):
         path = str(file)
         if path.lower().endswith(".parquet"):
             con.execute(f"""
-                CREATE OR REPLACE VIEW nand_health AS
+                CREATE OR REPLACE VIEW uploaded_data AS
                 SELECT * FROM read_parquet('{path}')
             """)
         else:
             con.execute(f"""
-                CREATE OR REPLACE VIEW nand_health AS
+                CREATE OR REPLACE VIEW uploaded_data AS
                 SELECT * FROM read_csv_auto('{path}')
             """)
     else:
@@ -76,25 +76,25 @@ def load_into_duckdb(con, file) -> int:
         data = pl.read_csv(file)
         con.register("_uploaded_data", data)
         con.execute("""
-            CREATE OR REPLACE VIEW nand_health AS
+            CREATE OR REPLACE VIEW uploaded_data AS
             SELECT * FROM _uploaded_data
         """)
 
-    row_count = con.execute("SELECT COUNT(*) FROM nand_health").fetchone()[0]
+    row_count = con.execute("SELECT COUNT(*) FROM uploaded_data").fetchone()[0]
     return row_count
 
 
 def connect_latest_parquet(con, upload_server_url: str = "http://127.0.0.1:8000") -> str:
     """
     backend/upload_server.py 에 최근 업로드된 parquet 파일을
-    nand_health 뷰로 연결한다. 연결한 parquet 파일 경로를 반환한다.
+    uploaded_data 뷰로 연결한다. 연결한 parquet 파일 경로를 반환한다.
     """
     response = requests.get(f"{upload_server_url}/upload/latest", timeout=3)
     response.raise_for_status()
     file_path = response.json()["file_path"]
 
     con.execute(f"""
-        CREATE OR REPLACE VIEW nand_health AS
+        CREATE OR REPLACE VIEW uploaded_data AS
         SELECT * FROM read_parquet('{file_path}')
     """)
     return file_path
@@ -154,16 +154,16 @@ def upload_file_in_chunks(file_path, upload_server_url="http://127.0.0.1:8000"):
 
 def get_schema(con) -> tuple[str, set[str]]:
     """
-    현재 nand_health 뷰의 컬럼 정보를 DuckDB에서 동적으로 읽는다.
+    현재 uploaded_data 뷰의 컬럼 정보를 DuckDB에서 동적으로 읽는다.
 
     반환:
         schema_str   — Claude 프롬프트에 넣을 스키마 설명 문자열
         allowed_cols — validate_sql 에 사용할 허용 컬럼 집합 (소문자)
     """
-    rows = con.execute("DESCRIBE nand_health").fetchall()
+    rows = con.execute("DESCRIBE uploaded_data").fetchall()
     # rows: [(column_name, column_type, null, key, default, extra), ...]
 
-    schema_lines = ["테이블명: nand_health\n", "컬럼 목록:"]
+    schema_lines = ["테이블명: uploaded_data\n", "컬럼 목록:"]
     allowed_cols: set[str] = set()
 
     for row in rows:
@@ -180,7 +180,7 @@ def get_schema(con) -> tuple[str, set[str]]:
 # SQL 검증 (동적 컬럼 기반)
 # =====================================
 
-ALLOWED_TABLE = "nand_health"
+ALLOWED_TABLE = "uploaded_data"
 
 SQL_KEYWORDS = {
     "SELECT", "FROM", "WHERE", "GROUP", "BY", "ORDER", "ASC", "DESC",
@@ -368,11 +368,11 @@ def _build_sql_prompt(question: str, schema: str, spec_text: str = "") -> str:
 ==================================================
 
 1. 위 스키마에 존재하는 컬럼만 사용한다.
-2. 테이블명은 반드시 nand_health 만 사용한다. 조회 대상이 이 테이블
+2. 테이블명은 반드시 uploaded_data 만 사용한다. 조회 대상이 이 테이블
    하나뿐이므로 테이블에 별칭(alias)을 붙이지 않는다 (예:
-   "FROM nand_health nh"나 "FROM nand_health AS nh"처럼 쓰지 말고
-   항상 "FROM nand_health"라고만 쓴다). 컬럼을 쓸 때도
-   "nand_health.컬럼"이 아니라 컬럼명만 그대로 쓴다.
+   "FROM uploaded_data nh"나 "FROM uploaded_data AS nh"처럼 쓰지 말고
+   항상 "FROM uploaded_data"라고만 쓴다). 컬럼을 쓸 때도
+   "uploaded_data.컬럼"이 아니라 컬럼명만 그대로 쓴다.
 3. SELECT 문 하나만 만든다.
 4. DROP, DELETE, UPDATE, INSERT, ALTER, CREATE 등은 절대 사용하지 않는다.
 5. 질문에 없는 조건을 임의로 추가하지 않는다.
@@ -400,6 +400,17 @@ def _build_sql_prompt(question: str, schema: str, spec_text: str = "") -> str:
 정렬 표현:
   "많은 순" / "높은 순" → ORDER BY DESC
   "적은 순" / "낮은 순" → ORDER BY ASC
+
+스키마/컬럼 목록 질문 ("어떤 컬럼이 있어", "칼럼 알려줘", "스키마 보여줘"처럼
+데이터 구조 자체를 묻는 경우):
+  이 데이터가 실제로 가진 컬럼과 타입은 이미 위 스키마에 나와 있으므로
+  information_schema 등 다른 테이블을 조회할 필요가 없다. 그 목록을 사람이
+  읽기 좋은 한 문장으로 정리해서 아래처럼 message로 반환한다.
+
+  SELECT '이 데이터는 다음 컬럼을 가지고 있습니다: <컬럼명(타입), 컬럼명(타입), ...>' AS message;
+
+  이건 모호한 질문이 아니라 정상적으로 답할 수 있는 질문이므로 ambiguous
+  필드는 반드시 null로 둔다.
 
 모호한 질문 (구체적 수치 기준 없이 "고장", "불량", "위험" 등만 있는 경우):
   위에 "확정된 질의 명세" 섹션이 있고 거기에 해당 표현의 기준이 적혀 있다면
@@ -443,7 +454,7 @@ ambiguous 는 위 "모호한 질문"에 해당할 때만 채우고, 정상적인
 
 def generate_sql_and_chart(question: str, schema: str, spec_text: str = "") -> dict:
     """
-    자연어 질문을 nand_health 테이블에 대한 SELECT SQL 문과 차트 힌트로 변환한다.
+    자연어 질문을 uploaded_data 테이블에 대한 SELECT SQL 문과 차트 힌트로 변환한다.
 
     spec_text: 확정된 질의 명세(spec_store.format_specs_for_prompt 결과).
                넘기면 모호한 표현이라도 명세에 기준이 있으면 그대로 답한다.
@@ -499,7 +510,7 @@ def _fallback_questions(con, count: int) -> list[str]:
     알면 만들 수 있는 질문이라 특정 도메인에 의존하지 않는다.
     """
     try:
-        rows = con.execute("DESCRIBE nand_health").fetchall()
+        rows = con.execute("DESCRIBE uploaded_data").fetchall()
     except Exception:
         return []
 
@@ -612,7 +623,7 @@ def summarize_result(
 {question}
 
 SQL 실행 결과 {preview_note}:
-{preview}
+{json.dumps(preview.to_dicts(), ensure_ascii=False)}
 
 규칙:
 1. 한국어로 한두 문장으로 요약한다.

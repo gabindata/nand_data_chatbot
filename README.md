@@ -19,7 +19,7 @@ CSV로 업로드한 NAND/UFS 품질 데이터를 자연어로 질문하면, Clau
                       │
                       ▼
       llm_sql/app.py::connect_latest_parquet()
-      → DuckDB가 parquet 파일을 뷰(nand_health)로 직접 연결
+      → DuckDB가 parquet 파일을 뷰(uploaded_data)로 직접 연결
 
 질문 처리:
   자연어 질문
@@ -104,7 +104,7 @@ UPLOAD_SERVER_URL=http://내부서버주소:8000 streamlit run frontend/app.py
 ## 동작 원리 (자연어 → SQL 파이프라인)
 
 1. **스키마 동적 조회** — 업로드된 파일의 실제 컬럼/타입을 `DESCRIBE
-   nand_health`로 매번 읽습니다. 컬럼이 파일마다 달라도 코드 수정이
+   uploaded_data`로 매번 읽습니다. 컬럼이 파일마다 달라도 코드 수정이
    필요 없습니다.
 2. **SQL + 차트 힌트 생성** — Claude에게 스키마와 질문을 주고, SQL과
    차트 정보(`{"type", "x", "y"}` 또는 `null`)를 JSON 하나로 함께
@@ -112,7 +112,7 @@ UPLOAD_SERVER_URL=http://내부서버주소:8000 streamlit run frontend/app.py
 3. **SQL 검증** (`validate_sql`) — 다음을 만족하지 않으면 실행하지
    않습니다.
    - `SELECT` 문 하나만 허용 (`DROP`/`DELETE`/`INSERT`/`CREATE` 등 차단)
-   - 테이블은 `nand_health`만 허용
+   - 테이블은 `uploaded_data`만 허용
    - 컬럼은 현재 파일에 실제로 존재하는 것만 허용
    - 함수는 정해진 화이트리스트만 허용 (`COUNT`, `AVG`, `SUBSTR`,
      `STDDEV` 등 — 전체 목록은 `llm_sql/app.py`의 `SQL_FUNCTIONS`)

@@ -79,7 +79,7 @@ def build_test_cases() -> list[dict]:
     # A. 전체 건수
     # ------------------------------------------------------------
     add("전체 집계", "전체 유닛이 몇 개야?",
-        "SELECT COUNT(*) AS cnt FROM nand_health")
+        "SELECT COUNT(*) AS cnt FROM uploaded_data")
 
     # ------------------------------------------------------------
     # A2. 컬럼별 단순 집계 (AVG/SUM/MAX/MIN) — 5 컬럼 x 4 함수 = 20
@@ -95,31 +95,31 @@ def build_test_cases() -> list[dict]:
             add(
                 "단순 집계",
                 f"{label}의 {phrase}은 얼마야?",
-                f"SELECT {func}({col}) AS result FROM nand_health",
+                f"SELECT {func}({col}) AS result FROM uploaded_data",
             )
 
     # ------------------------------------------------------------
     # B. model별 그룹 집계 (COUNT 1 + AVG x 5 = 6)
     # ------------------------------------------------------------
     add("그룹 집계", "모델별로 개수를 알려줘",
-        "SELECT model, COUNT(*) AS cnt FROM nand_health GROUP BY model")
+        "SELECT model, COUNT(*) AS cnt FROM uploaded_data GROUP BY model")
     for col, label in NUMERIC_COLUMNS:
         add(
             "그룹 집계",
             f"모델별 {label} 평균을 보여줘",
-            f"SELECT model, AVG({col}) AS avg_val FROM nand_health GROUP BY model",
+            f"SELECT model, AVG({col}) AS avg_val FROM uploaded_data GROUP BY model",
         )
 
     # ------------------------------------------------------------
     # B2. capacity_gb별 그룹 집계 (COUNT 1 + AVG x 5 = 6)
     # ------------------------------------------------------------
     add("그룹 집계", "용량(capacity_gb)별로 몇 개씩 있는지 알려줘",
-        "SELECT capacity_gb, COUNT(*) AS cnt FROM nand_health GROUP BY capacity_gb")
+        "SELECT capacity_gb, COUNT(*) AS cnt FROM uploaded_data GROUP BY capacity_gb")
     for col, label in NUMERIC_COLUMNS:
         add(
             "그룹 집계",
             f"용량별 {label} 평균이 어떻게 돼?",
-            f"SELECT capacity_gb, AVG({col}) AS avg_val FROM nand_health GROUP BY capacity_gb",
+            f"SELECT capacity_gb, AVG({col}) AS avg_val FROM uploaded_data GROUP BY capacity_gb",
         )
 
     # ------------------------------------------------------------
@@ -131,7 +131,7 @@ def build_test_cases() -> list[dict]:
             add(
                 "필터+개수",
                 f"{label}이 {threshold} {phrase}인 유닛이 몇 개야?",
-                f"SELECT COUNT(*) AS cnt FROM nand_health WHERE {col} {op} {threshold}",
+                f"SELECT COUNT(*) AS cnt FROM uploaded_data WHERE {col} {op} {threshold}",
             )
 
     # ------------------------------------------------------------
@@ -143,7 +143,7 @@ def build_test_cases() -> list[dict]:
             add(
                 "필터+평균",
                 f"{label}이 {threshold} {phrase}인 유닛들의 {label} 평균은?",
-                f"SELECT AVG({col}) AS avg_val FROM nand_health WHERE {col} {op} {threshold}",
+                f"SELECT AVG({col}) AS avg_val FROM uploaded_data WHERE {col} {op} {threshold}",
             )
 
     # ------------------------------------------------------------
@@ -154,7 +154,7 @@ def build_test_cases() -> list[dict]:
         add(
             "필터+합계",
             f"{label}이 {threshold} 이상인 유닛들의 {label} 합계는 얼마야?",
-            f"SELECT SUM({col}) AS sum_val FROM nand_health WHERE {col} >= {threshold}",
+            f"SELECT SUM({col}) AS sum_val FROM uploaded_data WHERE {col} >= {threshold}",
         )
 
     # ------------------------------------------------------------
@@ -170,7 +170,7 @@ def build_test_cases() -> list[dict]:
             add(
                 "필터+그룹",
                 f"{label}이 {threshold} 이상인 유닛을 모델별로 몇 개씩인지 알려줘",
-                f"SELECT model, COUNT(*) AS cnt FROM nand_health "
+                f"SELECT model, COUNT(*) AS cnt FROM uploaded_data "
                 f"WHERE {col} >= {threshold} GROUP BY model",
                 notes=tag,
             )
@@ -182,12 +182,12 @@ def build_test_cases() -> list[dict]:
         add(
             "정렬",
             f"{label}이 가장 높은 유닛 5개를 unit_id랑 같이 보여줘",
-            f"SELECT unit_id, {col} FROM nand_health ORDER BY {col} DESC LIMIT 5",
+            f"SELECT unit_id, {col} FROM uploaded_data ORDER BY {col} DESC LIMIT 5",
         )
         add(
             "정렬",
             f"{label}이 가장 낮은 유닛 5개를 unit_id랑 같이 보여줘",
-            f"SELECT unit_id, {col} FROM nand_health ORDER BY {col} ASC LIMIT 5",
+            f"SELECT unit_id, {col} FROM uploaded_data ORDER BY {col} ASC LIMIT 5",
         )
 
     # ------------------------------------------------------------
@@ -196,31 +196,31 @@ def build_test_cases() -> list[dict]:
     add(
         "복합조건",
         "PE 사이클이 600 이상이고 온도가 50 이상인 유닛이 몇 개야?",
-        "SELECT COUNT(*) AS cnt FROM nand_health "
+        "SELECT COUNT(*) AS cnt FROM uploaded_data "
         "WHERE pe_cycle >= 600 AND temperature_c >= 50",
     )
     add(
         "복합조건",
         "에러 개수가 50 이상이고 사용 시간이 25000 이상인 유닛이 몇 개야?",
-        "SELECT COUNT(*) AS cnt FROM nand_health "
+        "SELECT COUNT(*) AS cnt FROM uploaded_data "
         "WHERE error_count >= 50 AND usage_hours >= 25000",
     )
     add(
         "복합조건",
         "불안정 카운트가 25 이상이고 온도가 70 이하인 유닛이 몇 개야?",
-        "SELECT COUNT(*) AS cnt FROM nand_health "
+        "SELECT COUNT(*) AS cnt FROM uploaded_data "
         "WHERE unstable_count >= 25 AND temperature_c <= 70",
     )
     add(
         "복합조건",
         "모델이 A이고 PE 사이클이 600 이상인 유닛이 몇 개야?",
-        "SELECT COUNT(*) AS cnt FROM nand_health "
+        "SELECT COUNT(*) AS cnt FROM uploaded_data "
         "WHERE model = 'A' AND pe_cycle >= 600",
     )
     add(
         "복합조건",
         "용량이 1024이고 온도가 50 이상인 유닛이 몇 개야?",
-        "SELECT COUNT(*) AS cnt FROM nand_health "
+        "SELECT COUNT(*) AS cnt FROM uploaded_data "
         "WHERE capacity_gb = 1024 AND temperature_c >= 50",
     )
 
@@ -249,13 +249,13 @@ def build_test_cases() -> list[dict]:
         add(
             "카테고리 필터",
             f"모델이 {m}인 유닛이 몇 개야?",
-            f"SELECT COUNT(*) AS cnt FROM nand_health WHERE model = '{m}'",
+            f"SELECT COUNT(*) AS cnt FROM uploaded_data WHERE model = '{m}'",
         )
     for c in CAPACITIES:
         add(
             "카테고리 필터",
             f"용량이 {c}GB인 유닛이 몇 개야?",
-            f"SELECT COUNT(*) AS cnt FROM nand_health WHERE capacity_gb = {c}",
+            f"SELECT COUNT(*) AS cnt FROM uploaded_data WHERE capacity_gb = {c}",
         )
 
     return cases

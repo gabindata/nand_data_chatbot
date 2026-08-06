@@ -198,7 +198,7 @@ BACKGROUND_PATH = BASE_DIR / "assets" / "sunny_bg.png"
 AVATAR_PATH = BASE_DIR / "assets" / "sunny_avatar.png"
 
 st.set_page_config(
-    page_title="SUNNY 9조 데이터 챗봇",
+    page_title="써니 9조 데이터 챗봇",
     page_icon="☀️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -771,8 +771,8 @@ with st.sidebar:
     with col_name:
         st.markdown(
             """
-            <p class="brand-kicker">SUNNY 9 TEAM</p>
-            <p class="brand-title">SUNNY 9조</p>
+            <p class="brand-kicker">SUNI TEAM</p>
+            <p class="brand-title">써니 9조</p>
             <p class="brand-subtitle">데이터 분석 챗봇</p>
             """,
             unsafe_allow_html=True,
@@ -872,7 +872,7 @@ with st.sidebar:
                 try:
                     connect_latest_parquet(st.session_state.con, UPLOAD_SERVER_URL)
                     row_count = st.session_state.con.execute(
-                        "SELECT COUNT(*) FROM nand_health"
+                        "SELECT COUNT(*) FROM uploaded_data"
                     ).fetchone()[0]
                     st.session_state.data_loaded = True
                     st.session_state.row_count = row_count
@@ -885,7 +885,7 @@ with st.sidebar:
                     st.error(f"연결 실패: {e}")
 
     st.markdown("---")
-    st.caption("SUNNY 9조 · v1.0")
+    st.caption("써니 9조 · v1.0")
 
 
 def render_chart(df: pd.DataFrame, chart: dict[str, str]) -> None:
@@ -1114,7 +1114,7 @@ with hero_col:
         f"""
         <section class="hero">
             <div class="{hero_badge_class}">{hero_badge_text}</div>
-            <h1 class="hero-title">SUNNY 데이터 챗봇</h1>
+            <h1 class="hero-title">써니 데이터 챗봇</h1>
             <p class="hero-description">
                 CSV 데이터를 자연어로 검색하고, 조회 결과를 표와 그래프로 확인하세요.
             </p>
