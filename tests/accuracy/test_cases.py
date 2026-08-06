@@ -52,6 +52,24 @@ THRESHOLDS_2 = {
     "usage_hours": 40000,
 }
 
+# 세 번째 임계값(추가 필터 다양성용, 앞의 두 세트와 다른 값)
+THRESHOLDS_3 = {
+    "pe_cycle": 300,
+    "unstable_count": 10,
+    "temperature_c": 35,
+    "error_count": 20,
+    "usage_hours": 10000,
+}
+
+# BETWEEN 범위 케이스용 (하한, 상한)
+RANGES = {
+    "pe_cycle": (400, 800),
+    "unstable_count": (10, 30),
+    "temperature_c": (40, 65),
+    "error_count": (20, 60),
+    "usage_hours": (10000, 30000),
+}
+
 MODELS = ["A", "B", "C", "D"]
 CAPACITIES = [128, 256, 512, 1024]
 
@@ -256,6 +274,344 @@ def build_test_cases() -> list[dict]:
             "카테고리 필터",
             f"용량이 {c}GB인 유닛이 몇 개야?",
             f"SELECT COUNT(*) AS cnt FROM uploaded_data WHERE capacity_gb = {c}",
+        )
+
+    # ------------------------------------------------------------
+    # I. 복합 집계 — 한 질문에 여러 통계 함께 요청 (5 컬럼 x 3 조합 = 15)
+    # ------------------------------------------------------------
+    agg_pairs = [
+        ("평균", "AVG", "최댓값", "MAX"),
+        ("평균", "AVG", "최솟값", "MIN"),
+        ("최댓값", "MAX", "최솟값", "MIN"),
+    ]
+    for col, label in NUMERIC_COLUMNS:
+        for p1, f1, p2, f2 in agg_pairs:
+            add(
+                "복합집계",
+                f"{label}의 {p1}이랑 {p2}을 같이 알려줘",
+                f"SELECT {f1}({col}) AS val1, {f2}({col}) AS val2 FROM uploaded_data",
+            )
+
+    # ------------------------------------------------------------
+    # J. 다중 그룹(model + capacity_gb) — COUNT 1 + AVG 5 = 6
+    # ------------------------------------------------------------
+    add(
+        "다중그룹",
+        "모델별, 용량별로 개수를 알려줘",
+        "SELECT model, capacity_gb, COUNT(*) AS cnt FROM uploaded_data "
+        "GROUP BY model, capacity_gb",
+    )
+    for col, label in NUMERIC_COLUMNS:
+        add(
+            "다중그룹",
+            f"모델별, 용량별 {label} 평균을 보여줘",
+            f"SELECT model, capacity_gb, AVG({col}) AS avg_val FROM uploaded_data "
+            f"GROUP BY model, capacity_gb",
+        )
+
+    # ------------------------------------------------------------
+    # K. HAVING — 그룹 집계 후 조건 필터 (5개)
+    # ------------------------------------------------------------
+    for col, label in NUMERIC_COLUMNS:
+        threshold = THRESHOLDS[col]
+        add(
+            "HAVING",
+            f"{label} 평균이 {threshold} 이상인 모델만 보여줘",
+            f"SELECT model, AVG({col}) AS avg_val FROM uploaded_data "
+            f"GROUP BY model HAVING AVG({col}) >= {threshold}",
+        )
+
+    # ------------------------------------------------------------
+    # L. BETWEEN 범위 — 5개
+    # ------------------------------------------------------------
+    for col, label in NUMERIC_COLUMNS:
+        lo, hi = RANGES[col]
+        add(
+            "범위조건",
+            f"{label}이 {lo}에서 {hi} 사이인 유닛이 몇 개야?",
+            f"SELECT COUNT(*) AS cnt FROM uploaded_data "
+            f"WHERE {col} BETWEEN {lo} AND {hi}",
+        )
+
+    # ------------------------------------------------------------
+    # M. 부정 조건 — model 4개 + capacity_gb 4개 = 8
+    # ------------------------------------------------------------
+    for m in MODELS:
+        add(
+            "부정조건",
+            f"모델이 {m}이 아닌 유닛이 몇 개야?",
+            f"SELECT COUNT(*) AS cnt FROM uploaded_data WHERE model != '{m}'",
+        )
+    for c in CAPACITIES:
+        add(
+            "부정조건",
+            f"용량이 {c}GB가 아닌 유닛이 몇 개야?",
+            f"SELECT COUNT(*) AS cnt FROM uploaded_data WHERE capacity_gb != {c}",
+        )
+
+    # ------------------------------------------------------------
+    # N. OR 복합조건 — 6개
+    # ------------------------------------------------------------
+    or_model_pairs = [("A", "B"), ("C", "D"), ("A", "D")]
+    for m1, m2 in or_model_pairs:
+        add(
+            "OR조건",
+            f"모델이 {m1}이거나 {m2}인 유닛이 몇 개야?",
+            f"SELECT COUNT(*) AS cnt FROM uploaded_data "
+            f"WHERE model = '{m1}' OR model = '{m2}'",
+        )
+    or_capacity_pairs = [(128, 256), (512, 1024), (128, 1024)]
+    for c1, c2 in or_capacity_pairs:
+        add(
+            "OR조건",
+            f"용량이 {c1}GB이거나 {c2}GB인 유닛이 몇 개야?",
+            f"SELECT COUNT(*) AS cnt FROM uploaded_data "
+            f"WHERE capacity_gb = {c1} OR capacity_gb = {c2}",
+        )
+
+    # ------------------------------------------------------------
+    # O. 3중 AND 복합조건 — 4개
+    # ------------------------------------------------------------
+    add(
+        "3중복합조건",
+        "PE 사이클이 600 이상이고 온도가 50 이상이고 에러 개수가 50 이상인 유닛이 몇 개야?",
+        "SELECT COUNT(*) AS cnt FROM uploaded_data "
+        "WHERE pe_cycle >= 600 AND temperature_c >= 50 AND error_count >= 50",
+    )
+    add(
+        "3중복합조건",
+        "모델이 A이고 용량이 1024이고 PE 사이클이 600 이상인 유닛이 몇 개야?",
+        "SELECT COUNT(*) AS cnt FROM uploaded_data "
+        "WHERE model = 'A' AND capacity_gb = 1024 AND pe_cycle >= 600",
+    )
+    add(
+        "3중복합조건",
+        "불안정 카운트가 25 이상이고 사용 시간이 25000 이상이고 온도가 50 이상인 유닛이 몇 개야?",
+        "SELECT COUNT(*) AS cnt FROM uploaded_data "
+        "WHERE unstable_count >= 25 AND usage_hours >= 25000 AND temperature_c >= 50",
+    )
+    add(
+        "3중복합조건",
+        "모델이 B이고 에러 개수가 50 이하이고 온도가 70 이하인 유닛이 몇 개야?",
+        "SELECT COUNT(*) AS cnt FROM uploaded_data "
+        "WHERE model = 'B' AND error_count <= 50 AND temperature_c <= 70",
+    )
+
+    # ------------------------------------------------------------
+    # P. DISTINCT — 2개
+    # ------------------------------------------------------------
+    add(
+        "DISTINCT",
+        "모델이 몇 가지 종류가 있어?",
+        "SELECT COUNT(DISTINCT model) AS cnt FROM uploaded_data",
+    )
+    add(
+        "DISTINCT",
+        "용량 종류가 몇 가지야?",
+        "SELECT COUNT(DISTINCT capacity_gb) AS cnt FROM uploaded_data",
+    )
+
+    # ------------------------------------------------------------
+    # Q. 비율/퍼센트 — 5개
+    # ------------------------------------------------------------
+    for col, label in NUMERIC_COLUMNS:
+        threshold = THRESHOLDS[col]
+        add(
+            "비율",
+            f"{label}이 {threshold} 이상인 유닛의 비율은 몇 퍼센트야?",
+            f"SELECT ROUND(COUNT(CASE WHEN {col} >= {threshold} THEN 1 END) * 100.0 "
+            f"/ COUNT(*), 2) AS pct FROM uploaded_data",
+        )
+
+    # ------------------------------------------------------------
+    # R. 추가 임계값 필터+개수 (THRESHOLDS_3, 5 컬럼 x 4 비교 = 20)
+    # ------------------------------------------------------------
+    for col, label in NUMERIC_COLUMNS:
+        threshold = THRESHOLDS_3[col]
+        for phrase, op in COMPARATORS:
+            add(
+                "필터+개수",
+                f"{label}이 {threshold} {phrase}인 유닛 개수는?",
+                f"SELECT COUNT(*) AS cnt FROM uploaded_data WHERE {col} {op} {threshold}",
+                notes="세 번째 임계값 세트",
+            )
+
+    # ------------------------------------------------------------
+    # S. 추가 정렬 — top3 내림차순 + top10 오름차순 (5 컬럼 x 2 = 10)
+    # ------------------------------------------------------------
+    for col, label in NUMERIC_COLUMNS:
+        add(
+            "정렬",
+            f"{label} 상위 3개 유닛을 unit_id랑 같이 보여줘",
+            f"SELECT unit_id, {col} FROM uploaded_data ORDER BY {col} DESC LIMIT 3",
+        )
+        add(
+            "정렬",
+            f"{label} 하위 10개 유닛을 unit_id랑 같이 보여줘",
+            f"SELECT unit_id, {col} FROM uploaded_data ORDER BY {col} ASC LIMIT 10",
+        )
+
+    # ------------------------------------------------------------
+    # T. 모델별 추가 집계 (MAX, SUM — 5 컬럼 x 2 = 10)
+    # ------------------------------------------------------------
+    for col, label in NUMERIC_COLUMNS:
+        add(
+            "그룹 집계",
+            f"모델별 {label} 최댓값을 알려줘",
+            f"SELECT model, MAX({col}) AS max_val FROM uploaded_data GROUP BY model",
+        )
+        add(
+            "그룹 집계",
+            f"모델별 {label} 합계를 알려줘",
+            f"SELECT model, SUM({col}) AS sum_val FROM uploaded_data GROUP BY model",
+        )
+
+    # ------------------------------------------------------------
+    # U. 용량별 추가 집계 (MAX, SUM — 5 컬럼 x 2 = 10)
+    # ------------------------------------------------------------
+    for col, label in NUMERIC_COLUMNS:
+        add(
+            "그룹 집계",
+            f"용량별 {label} 최댓값을 알려줘",
+            f"SELECT capacity_gb, MAX({col}) AS max_val FROM uploaded_data GROUP BY capacity_gb",
+        )
+        add(
+            "그룹 집계",
+            f"용량별 {label} 합계를 알려줘",
+            f"SELECT capacity_gb, SUM({col}) AS sum_val FROM uploaded_data GROUP BY capacity_gb",
+        )
+
+    # ------------------------------------------------------------
+    # V. 추가 필터+평균 (THRESHOLDS_3, 이상/이하 — 5 컬럼 x 2 = 10)
+    # ------------------------------------------------------------
+    for col, label in NUMERIC_COLUMNS:
+        threshold = THRESHOLDS_3[col]
+        for phrase, op in [COMPARATORS[0], COMPARATORS[2]]:  # 이상, 이하
+            add(
+                "필터+평균",
+                f"{label}이 {threshold} {phrase}인 유닛들의 {label} 평균은 얼마야?",
+                f"SELECT AVG({col}) AS avg_val FROM uploaded_data WHERE {col} {op} {threshold}",
+                notes="세 번째 임계값 세트",
+            )
+
+    # ------------------------------------------------------------
+    # W. 추가 필터+합계 (THRESHOLDS 사용 — 5개)
+    # ------------------------------------------------------------
+    for col, label in NUMERIC_COLUMNS:
+        threshold = THRESHOLDS[col]
+        add(
+            "필터+합계",
+            f"{label}이 {threshold} 이하인 유닛들의 {label} 합계는?",
+            f"SELECT SUM({col}) AS sum_val FROM uploaded_data WHERE {col} <= {threshold}",
+        )
+
+    # ------------------------------------------------------------
+    # X. model x capacity_gb 조합 필터 — 4 x 4 = 16
+    # ------------------------------------------------------------
+    for m in MODELS:
+        for c in CAPACITIES:
+            add(
+                "카테고리 필터",
+                f"모델이 {m}이고 용량이 {c}GB인 유닛이 몇 개야?",
+                f"SELECT COUNT(*) AS cnt FROM uploaded_data "
+                f"WHERE model = '{m}' AND capacity_gb = {c}",
+            )
+
+    # ------------------------------------------------------------
+    # Y. 추가 모호한 질문 — 10개
+    # ------------------------------------------------------------
+    more_ambiguous_questions = [
+        "이상 징후 있는 유닛 알려줘",
+        "품질 나쁜 유닛 찾아줘",
+        "오래된 유닛 보여줘",
+        "성능 나쁜 유닛이 몇 개야?",
+        "정상 유닛만 보여줘",
+        "교체가 필요한 유닛 알려줘",
+        "수명이 다한 유닛 찾아줘",
+        "심각한 유닛들 좀 봐줘",
+        "믿을 수 없는 유닛 알려줘",
+        "쓸만한 유닛 개수는?",
+    ]
+    for q in more_ambiguous_questions:
+        add(
+            "모호한 질문",
+            q,
+            "SELECT '질문의 기준이 명확하지 않습니다.' AS message",
+            notes="구체적 기준 없음 → 명확화 메시지가 기대됨",
+        )
+
+    # ------------------------------------------------------------
+    # Z. 단순 집계 패러프레이즈 다양화 — 5 컬럼 x 2 표현 = 10
+    # ------------------------------------------------------------
+    for col, label in NUMERIC_COLUMNS:
+        add(
+            "단순 집계",
+            f"{label} 평균이 어떻게 돼?",
+            f"SELECT AVG({col}) AS result FROM uploaded_data",
+            notes="평균 패러프레이즈",
+        )
+        add(
+            "단순 집계",
+            f"{label}이 가장 높은 값은 얼마야?",
+            f"SELECT MAX({col}) AS result FROM uploaded_data",
+            notes="최댓값 패러프레이즈",
+        )
+
+    # ------------------------------------------------------------
+    # AA. model 필터 + 평균 (2 컬럼 x 4 모델 = 8)
+    # ------------------------------------------------------------
+    for col, label in [("pe_cycle", "PE 사이클"), ("temperature_c", "온도")]:
+        for m in MODELS:
+            add(
+                "필터+평균",
+                f"모델이 {m}인 유닛들의 {label} 평균은?",
+                f"SELECT AVG({col}) AS avg_val FROM uploaded_data WHERE model = '{m}'",
+                notes="모델 필터",
+            )
+
+    # ------------------------------------------------------------
+    # BB. capacity_gb 필터 + 평균 (2 컬럼 x 4 용량 = 8)
+    # ------------------------------------------------------------
+    for col, label in [("error_count", "에러 개수"), ("usage_hours", "사용 시간")]:
+        for c in CAPACITIES:
+            add(
+                "필터+평균",
+                f"용량이 {c}GB인 유닛들의 {label} 평균은?",
+                f"SELECT AVG({col}) AS avg_val FROM uploaded_data WHERE capacity_gb = {c}",
+                notes="용량 필터",
+            )
+
+    # ------------------------------------------------------------
+    # CC. 전체 개수 동의어 표현 — 5개
+    # ------------------------------------------------------------
+    total_count_paraphrases = [
+        "데이터가 총 몇 건이야?",
+        "전체 행 수가 몇 개야?",
+        "총 몇 대야?",
+        "유닛 총 개수 알려줘",
+        "데이터 전체 크기가 어떻게 돼?",
+    ]
+    for q in total_count_paraphrases:
+        add(
+            "전체 집계",
+            q,
+            "SELECT COUNT(*) AS cnt FROM uploaded_data",
+            notes="전체 개수 패러프레이즈",
+        )
+
+    # ------------------------------------------------------------
+    # DD. 모델별 최솟값 + 용량별 최솟값 (5 컬럼 x 2 = 10)
+    # ------------------------------------------------------------
+    for col, label in NUMERIC_COLUMNS:
+        add(
+            "그룹 집계",
+            f"모델별 {label} 최솟값을 알려줘",
+            f"SELECT model, MIN({col}) AS min_val FROM uploaded_data GROUP BY model",
+        )
+        add(
+            "그룹 집계",
+            f"용량별 {label} 최솟값을 알려줘",
+            f"SELECT capacity_gb, MIN({col}) AS min_val FROM uploaded_data GROUP BY capacity_gb",
         )
 
     return cases
