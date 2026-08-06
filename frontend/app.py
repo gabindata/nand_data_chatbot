@@ -276,8 +276,8 @@ st.markdown(
     .block-container {{
         max-width: 980px;
         width: 100%;
-        margin: 18px auto 0 auto;
-        padding: 1.6rem 2.25rem 1.6rem 2.25rem;
+        margin: 14px auto 0 auto;
+        padding: 1.1rem 1.5rem 1.1rem 1.5rem;
         border: 1px solid var(--border);
         border-radius: 28px;
         background: rgba(255, 255, 255, 0.78);
@@ -314,15 +314,7 @@ st.markdown(
     }}
 
     [data-testid="stSidebarContent"] {{
-        padding-top: 1.15rem;
-    }}
-
-    .brand-kicker {{
-        margin: 0 0 2px 0;
-        color: var(--sunny-red);
-        font-size: 11px;
-        font-weight: 800;
-        letter-spacing: 0.10em;
+        padding-top: 0.8rem;
     }}
 
     .brand-title {{
@@ -340,9 +332,9 @@ st.markdown(
     }}
 
     .hero {{
-        padding: 2px 2px 20px 2px;
+        padding: 2px 2px 12px 2px;
         border-bottom: 1px solid rgba(84, 145, 173, 0.14);
-        margin-bottom: 1rem;
+        margin-bottom: 0.6rem;
     }}
 
     .hero-badge {{
@@ -381,8 +373,8 @@ st.markdown(
     }}
 
     .welcome-card {{
-        margin: 14px 0 22px 0;
-        padding: 25px 22px;
+        margin: 10px 0 14px 0;
+        padding: 16px 18px;
         text-align: center;
         border-radius: 23px;
         background: rgba(255, 255, 255, 0.74);
@@ -404,8 +396,8 @@ st.markdown(
     }}
 
     .data-card {{
-        margin-top: 8px;
-        padding: 13px 14px;
+        margin-top: 6px;
+        padding: 9px 11px;
         border-radius: 15px;
         background: rgba(255, 255, 255, 0.80);
         border: 1px solid rgba(113, 170, 197, 0.18);
@@ -437,8 +429,8 @@ st.markdown(
     }}
 
     [data-testid="stChatMessage"] {{
-        margin-bottom: 0.75rem;
-        padding: 1rem 1.05rem;
+        margin-bottom: 0.5rem;
+        padding: 0.7rem 0.85rem;
         border: 1px solid rgba(181, 216, 231, 0.60);
         border-radius: 20px;
         background: rgba(255, 255, 255, 0.86);
@@ -491,8 +483,8 @@ st.markdown(
     /* 어시스턴트 답변 요약 텍스트를 담는 박스. 블러 없이 단색 배경 +
        회색 테두리로 눈에 띄게 감싼다. */
     .answer-summary {{
-        margin: 10px 0 4px 0;
-        padding: 14px 16px;
+        margin: 6px 0 4px 0;
+        padding: 10px 13px;
         border: 1px solid #c7d4da;
         border-radius: 14px;
         background: #f2f9fb;
@@ -509,8 +501,8 @@ st.markdown(
     /* 탭 콘텐츠(핵심 결과 / 데이터 표 / 시각화) 영역을 단색 테두리로 강조.
        블러 없이 깔끔한 단색 배경 + 테두리만 사용한다. */
     [data-testid="stTabs"] [role="tabpanel"] {{
-        margin-top: 10px;
-        padding: 16px 18px;
+        margin-top: 6px;
+        padding: 11px 13px;
         border: 1px solid #c7d4da;
         border-radius: 14px;
         background: #ffffff;
@@ -559,8 +551,8 @@ st.markdown(
 
     /* ---- 기준이 모호해 답을 보류했을 때 보여주는 카드 ---- */
     .clarify-card {{
-        margin: 10px 0 4px 0;
-        padding: 14px 16px;
+        margin: 6px 0 4px 0;
+        padding: 10px 13px;
         border: 1px solid #e6b8b4;
         border-left: 4px solid var(--sunny-red);
         border-radius: 14px;
@@ -703,8 +695,40 @@ st.markdown(
 # ---------------------------------------------------------
 # 상태 관리
 # ---------------------------------------------------------
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+def make_conversation() -> dict[str, Any]:
+    """새 대화 하나의 상태. title은 첫 질문이 들어오기 전까지 None."""
+    return {
+        "id": str(uuid.uuid4()),
+        "title": None,
+        "messages": [],
+        "pending_clarification": None,
+    }
+
+
+# 대화는 여러 개를 동시에 들고 있는다("새 채팅"을 눌러도 이전 대화는
+# 지워지지 않고 목록에 남는다). 브라우저 세션 동안만 유지되고, 새로고침하면
+# 초기화된다(파일로 영구 저장하지 않음).
+if "conversations" not in st.session_state:
+    st.session_state.conversations = [make_conversation()]
+
+if "active_conversation_id" not in st.session_state:
+    st.session_state.active_conversation_id = st.session_state.conversations[0]["id"]
+
+if "renaming_conv_id" not in st.session_state:
+    st.session_state.renaming_conv_id = None
+
+
+def get_active_conversation() -> dict[str, Any]:
+    for conv in st.session_state.conversations:
+        if conv["id"] == st.session_state.active_conversation_id:
+            return conv
+    # 활성 id가 가리키는 대화가 없으면(이론상 발생하지 않아야 하지만)
+    # 새 대화를 만들어 복구한다.
+    conv = make_conversation()
+    st.session_state.conversations.append(conv)
+    st.session_state.active_conversation_id = conv["id"]
+    return conv
+
 
 if "pending_prompt" not in st.session_state:
     st.session_state.pending_prompt = None
@@ -732,18 +756,9 @@ if "suggested_questions" not in st.session_state:
 if "scroll_to_bottom" not in st.session_state:
     st.session_state.scroll_to_bottom = False
 
-# "최근 대화"에서 특정 질문을 클릭했을 때 그 위치로 스크롤하기 위한 대상 id
-if "scroll_to_message_id" not in st.session_state:
-    st.session_state.scroll_to_message_id = None
-
 # 질의 명세서 — 파일에 영구 저장되므로 세션 시작 시 한 번 읽어온다.
 if "specs" not in st.session_state:
     st.session_state.specs = load_specs()
-
-# 기준이 모호해 답을 보류한 질문. 다음 사용자 입력을 이 질문에 대한
-# 명확화 답변으로 해석하기 위해 들고 있는다.
-if "pending_clarification" not in st.session_state:
-    st.session_state.pending_clarification = None
 
 if "show_spec_panel" not in st.session_state:
     st.session_state.show_spec_panel = False
@@ -751,12 +766,6 @@ if "show_spec_panel" not in st.session_state:
 # 방금 추가된 명세를 패널에서 강조 표시하기 위한 id
 if "latest_spec_id" not in st.session_state:
     st.session_state.latest_spec_id = None
-
-
-def reset_chat() -> None:
-    st.session_state.messages = []
-    st.session_state.pending_prompt = None
-    st.session_state.pending_clarification = None
 
 
 # ---------------------------------------------------------
@@ -771,7 +780,6 @@ with st.sidebar:
     with col_name:
         st.markdown(
             """
-            <p class="brand-kicker">SUNI TEAM</p>
             <p class="brand-title">써니 9조</p>
             <p class="brand-subtitle">데이터 분석 챗봇</p>
             """,
@@ -781,28 +789,57 @@ with st.sidebar:
     st.write("")
 
     if st.button("＋ 새 채팅", use_container_width=True):
-        reset_chat()
+        new_conv = make_conversation()
+        st.session_state.conversations.append(new_conv)
+        st.session_state.active_conversation_id = new_conv["id"]
+        st.session_state.pending_prompt = None
         st.rerun()
 
     st.markdown("##### 최근 대화")
 
-    user_messages = [
-        message
-        for message in st.session_state.messages
-        if message["role"] == "user"
+    conversations_with_content = [
+        conv for conv in st.session_state.conversations if conv["messages"]
     ]
 
-    if user_messages:
-        for message in reversed(user_messages[-5:]):
-            title = message["content"]
-            label = title if len(title) <= 24 else title[:24] + "…"
-            if st.button(
-                f"💬 {label}",
-                key=f"jump_{message['id']}",
-                use_container_width=True,
-            ):
-                st.session_state.scroll_to_message_id = message["id"]
-                st.rerun()
+    if conversations_with_content:
+        for conv in reversed(conversations_with_content[-8:]):
+            is_active = conv["id"] == st.session_state.active_conversation_id
+            display_title = conv["title"] or "새 대화"
+
+            if st.session_state.renaming_conv_id == conv["id"]:
+                new_title = st.text_input(
+                    "대화 제목 수정",
+                    value=display_title,
+                    key=f"rename_input_{conv['id']}",
+                    label_visibility="collapsed",
+                )
+                save_col, cancel_col = st.columns(2)
+                with save_col:
+                    if st.button("저장", key=f"save_{conv['id']}", use_container_width=True):
+                        if new_title.strip():
+                            conv["title"] = new_title.strip()
+                        st.session_state.renaming_conv_id = None
+                        st.rerun()
+                with cancel_col:
+                    if st.button("취소", key=f"cancel_{conv['id']}", use_container_width=True):
+                        st.session_state.renaming_conv_id = None
+                        st.rerun()
+            else:
+                label = display_title if len(display_title) <= 16 else display_title[:16] + "…"
+                switch_col, edit_col = st.columns([5, 1])
+                with switch_col:
+                    prefix = "🟢 " if is_active else "💬 "
+                    if st.button(
+                        f"{prefix}{label}",
+                        key=f"switch_{conv['id']}",
+                        use_container_width=True,
+                    ):
+                        st.session_state.active_conversation_id = conv["id"]
+                        st.rerun()
+                with edit_col:
+                    if st.button("✏️", key=f"edit_{conv['id']}"):
+                        st.session_state.renaming_conv_id = conv["id"]
+                        st.rerun()
     else:
         st.caption("아직 대화 기록이 없습니다.")
 
@@ -831,7 +868,12 @@ with st.sidebar:
                 row_count = load_into_duckdb(st.session_state.con, uploaded_file)
                 st.session_state.data_loaded = True
                 st.session_state.row_count = row_count
-                st.session_state.messages = []
+                # 새 파일이 들어오면 이전 대화들은 다른 데이터셋 기준이라
+                # 더 이상 유효하지 않으므로 대화 목록을 새로 시작한다.
+                st.session_state.conversations = [make_conversation()]
+                st.session_state.active_conversation_id = (
+                    st.session_state.conversations[0]["id"]
+                )
                 st.session_state.loaded_file_id = uploaded_file.file_id
                 st.session_state.suggested_questions = suggest_questions(
                     st.session_state.con
@@ -876,7 +918,10 @@ with st.sidebar:
                     ).fetchone()[0]
                     st.session_state.data_loaded = True
                     st.session_state.row_count = row_count
-                    st.session_state.messages = []
+                    st.session_state.conversations = [make_conversation()]
+                    st.session_state.active_conversation_id = (
+                        st.session_state.conversations[0]["id"]
+                    )
                     st.session_state.suggested_questions = suggest_questions(
                         st.session_state.con
                     )
@@ -1143,8 +1188,10 @@ else:
 typed_prompt = st.chat_input("업로드한 데이터에 대해 질문해 주세요.")
 prompt = st.session_state.pending_prompt or typed_prompt
 
+active_conv = get_active_conversation()
+
 with main_col:
-    if not st.session_state.messages:
+    if not active_conv["messages"]:
         if st.session_state.data_loaded:
             welcome_text = "아래 추천 질문을 누르거나 채팅창에 직접 질문해 보세요."
         else:
@@ -1179,15 +1226,8 @@ with main_col:
                         st.session_state.pending_prompt = question
                         st.rerun()
 
-    for message in st.session_state.messages:
+    for message in active_conv["messages"]:
         avatar = sunny_avatar if message["role"] == "assistant" else "👤"
-
-        if message["role"] == "user" and message.get("id"):
-            # "최근 대화"에서 이 질문을 클릭했을 때 스크롤로 찾아올 지점.
-            st.markdown(
-                f'<div id="chat-anchor-{message["id"]}"></div>',
-                unsafe_allow_html=True,
-            )
 
         with st.chat_message(message["role"], avatar=avatar):
             if message["role"] == "assistant":
@@ -1203,7 +1243,9 @@ with main_col:
             "role": "user",
             "content": prompt,
         }
-        st.session_state.messages.append(user_message)
+        active_conv["messages"].append(user_message)
+        if active_conv["title"] is None:
+            active_conv["title"] = prompt if len(prompt) <= 20 else prompt[:20] + "…"
 
         with st.chat_message("user", avatar="👤"):
             st.markdown(prompt)
@@ -1213,7 +1255,7 @@ with main_col:
                 st.warning("사이드바에서 CSV 파일을 먼저 업로드해 주세요.")
                 st.stop()
 
-            pending = st.session_state.pending_clarification
+            pending = active_conv["pending_clarification"]
             spec_saved = None
 
             # 직전에 답을 보류했다면, 이번 입력은 그 질문에 대한 명확화
@@ -1226,7 +1268,7 @@ with main_col:
                 )
                 st.session_state.specs = load_specs()
                 st.session_state.latest_spec_id = spec_saved["id"]
-                st.session_state.pending_clarification = None
+                active_conv["pending_clarification"] = None
                 st.session_state.show_spec_panel = True
                 question_to_run = pending["question"]
             else:
@@ -1248,7 +1290,7 @@ with main_col:
 
             if result.get("is_ambiguous"):
                 # 아직 기준을 모르는 질문 — 답하지 않고 되묻는다.
-                st.session_state.pending_clarification = {
+                active_conv["pending_clarification"] = {
                     "question": question_to_run,
                     "reason": result["answer"],
                 }
@@ -1288,7 +1330,7 @@ with main_col:
                     },
                 }
 
-            st.session_state.messages.append(assistant_message)
+            active_conv["messages"].append(assistant_message)
 
         # 사이드바("최근 대화")와 명세서 패널은 이 지점보다 위에서 이미 그려졌기
         # 때문에, 방금 추가한 메시지는 지금 화면에 반영되지 않는다. 다시 그려서
@@ -1315,35 +1357,6 @@ with main_col:
                 // 한 번 더 시도한다. (계속 지켜보는 옵저버는 두지 않는다.)
                 setTimeout(scrollToBottom, 150);
             })();
-            </script>
-            """,
-            height=0,
-        )
-
-    # 사이드바 "최근 대화"에서 특정 질문을 클릭했을 때, 그 질문이 있는
-    # 위치로 스크롤한다. (부모 문서를 iframe 너머로 조작하는 상황이라
-    # 'smooth' 애니메이션은 신뢰할 수 없어 즉시 이동시킨다 — 아래
-    # scroll-to-bottom과 동일한 방식)
-    if st.session_state.scroll_to_message_id:
-        target_id = st.session_state.scroll_to_message_id
-        st.session_state.scroll_to_message_id = None
-        components.html(
-            f"""
-            <script>
-            (function () {{
-                const doc = window.parent.document;
-                function scrollToAnchor() {{
-                    const el = doc.getElementById('chat-anchor-{target_id}');
-                    const container = doc.querySelector('.block-container');
-                    if (el && container) el.scrollIntoView({{behavior: 'auto', block: 'start'}});
-                }}
-                // 데이터 표/차트/탭처럼 뒤늦게 자리를 잡는 요소가 있으면 그
-                // 레이아웃 변화가 스크롤 위치를 다시 밀어내므로, 짧은 간격으로
-                // 여러 번 재조준한다. (마지막 시도가 최종 위치를 확정)
-                [0, 150, 400, 900, 1500].forEach((delay) => {{
-                    setTimeout(scrollToAnchor, delay);
-                }});
-            }})();
             </script>
             """,
             height=0,
