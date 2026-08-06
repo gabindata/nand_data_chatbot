@@ -329,7 +329,29 @@ def _extract_text(response) -> str:
     raise RuntimeError("Claude 응답에서 텍스트 블록을 찾지 못했습니다.")
 
 
-def _build_sql_prompt(question: str, schema: str) -> str:
+def _build_spec_section(spec_text: str) -> str:
+    """
+    확정된 질의 명세를 프롬프트 섹션으로 만든다.
+    명세가 없으면 빈 문자열이라 섹션 자체가 프롬프트에 생기지 않는다.
+    """
+    if not spec_text:
+        return ""
+
+    return f"""
+==================================================
+확정된 질의 명세 (사용자가 직접 확인해 준 기준)
+==================================================
+
+아래는 과거에 기준이 모호해서 사용자에게 되물었을 때, 사용자가 직접
+알려준 해석 기준이다. 이번 질문이 아래 항목과 같은 표현을 쓰고 있다면
+모호하다고 판단하지 말고, 명시된 기준을 그대로 적용해 정상적인 SELECT
+문을 만든다.
+
+{spec_text}
+"""
+
+
+def _build_sql_prompt(question: str, schema: str, spec_text: str = "") -> str:
     return f"""
 너는 데이터 분석용 SQL 생성기다.
 
@@ -339,6 +361,7 @@ def _build_sql_prompt(question: str, schema: str) -> str:
 
 사용자 질문:
 {question}
+{_build_spec_section(spec_text)}
 
 ==================================================
 규칙
@@ -379,6 +402,11 @@ def _build_sql_prompt(question: str, schema: str) -> str:
   "적은 순" / "낮은 순" → ORDER BY ASC
 
 모호한 질문 (구체적 수치 기준 없이 "고장", "불량", "위험" 등만 있는 경우):
+  위에 "확정된 질의 명세" 섹션이 있고 거기에 해당 표현의 기준이 적혀 있다면
+  모호한 것으로 보지 않고 그 기준을 그대로 적용한다. 참고할 기준이 없어
+  정말로 판단할 수 없을 때만 아래 SQL을 만들고, 출력 형식의 ambiguous
+  필드도 함께 채운다.
+
   SELECT '질문의 기준이 명확하지 않습니다.' AS message;
 
 ==================================================
@@ -404,14 +432,25 @@ SQL 결과를 함께 시각화할 수 있는지 판단해서 chart 정보도 만
 아래 형식의 JSON 객체 하나만 출력한다. 그 외 어떤 텍스트, 설명,
 마크다운 코드 블록도 포함하지 않는다.
 
-{{"sql": "<SELECT 문>", "chart": {{"type": "bar", "x": "<컬럼명>", "y": "<컬럼명>"}} 또는 null}}
+{{"sql": "<SELECT 문>", "chart": {{"type": "bar", "x": "<컬럼명>", "y": "<컬럼명>"}} 또는 null, "ambiguous": {{"reason": "<무엇이 모호한지 한 문장>", "ask": "<사용자에게 되물을 한 문장>"}} 또는 null}}
+
+ambiguous 는 위 "모호한 질문"에 해당할 때만 채우고, 정상적인 SQL을
+만들었을 때는 반드시 null 로 둔다. ask 에는 사용자가 무엇을 알려주면
+답할 수 있는지를 구체적으로 적는다 (예: "어떤 컬럼이 몇 이상일 때를
+불량으로 볼지 알려주세요").
 """
 
 
-def generate_sql_and_chart(question: str, schema: str) -> dict:
+def generate_sql_and_chart(question: str, schema: str, spec_text: str = "") -> dict:
     """
     자연어 질문을 nand_health 테이블에 대한 SELECT SQL 문과 차트 힌트로 변환한다.
-    반환: {"sql": str, "chart": dict | None}
+
+    spec_text: 확정된 질의 명세(spec_store.format_specs_for_prompt 결과).
+               넘기면 모호한 표현이라도 명세에 기준이 있으면 그대로 답한다.
+
+    반환: {"sql": str, "chart": dict | None, "ambiguous": dict | None}
+          ambiguous 는 기준이 모호해 답을 보류할 때만 채워지며
+          {"reason": str, "ask": str} 형태다.
     """
     response = client.messages.create(
         model=CLAUDE_MODEL,
@@ -420,7 +459,9 @@ def generate_sql_and_chart(question: str, schema: str) -> dict:
             "너는 정확한 SQL과 시각화 힌트를 생성하는 데이터 분석 전문가다. "
             "반드시 순수 JSON 객체 하나만 출력한다."
         ),
-        messages=[{"role": "user", "content": _build_sql_prompt(question, schema)}],
+        messages=[
+            {"role": "user", "content": _build_sql_prompt(question, schema, spec_text)}
+        ],
     )
     raw = _extract_text(response).strip()
     raw = re.sub(r"```json|```", "", raw).strip()
@@ -429,13 +470,23 @@ def generate_sql_and_chart(question: str, schema: str) -> dict:
         parsed = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
         # JSON 파싱에 실패하면 통짜 텍스트를 SQL로 간주하고 차트는 포기한다.
-        return {"sql": raw, "chart": None}
+        return {"sql": raw, "chart": None, "ambiguous": None}
 
     sql = str(parsed.get("sql", "")).strip()
     chart = parsed.get("chart")
     if not isinstance(chart, dict):
         chart = None
-    return {"sql": sql, "chart": chart}
+
+    ambiguous = parsed.get("ambiguous")
+    if isinstance(ambiguous, dict):
+        ambiguous = {
+            "reason": str(ambiguous.get("reason", "")).strip(),
+            "ask": str(ambiguous.get("ask", "")).strip(),
+        }
+    else:
+        ambiguous = None
+
+    return {"sql": sql, "chart": chart, "ambiguous": ambiguous}
 
 
 # =====================================
@@ -511,7 +562,10 @@ SQL 실행 결과 {preview_note}:
 # =====================================
 
 def answer_question(
-    con, question: str, on_progress: Callable[[str], None] | None = None
+    con,
+    question: str,
+    on_progress: Callable[[str], None] | None = None,
+    spec_text: str = "",
 ) -> dict:
     """
     자연어 질문 하나를 SQL 생성 → 검증 → 실행 → 요약까지 처리한다.
@@ -520,6 +574,8 @@ def answer_question(
                  호출되는 콜백. UI에서 실시간 진행 상황을 보여주고 싶을
                  때 넘긴다 (예: Streamlit st.status().write). 넘기지
                  않으면 아무 일도 하지 않는다.
+    spec_text:   확정된 질의 명세(spec_store.format_specs_for_prompt 결과).
+                 모호한 표현이라도 여기에 기준이 있으면 되묻지 않고 답한다.
 
     반환 형식:
     {
@@ -531,49 +587,71 @@ def answer_question(
         "validation": str,           # 검증 결과
         "chart": dict,               # 시각화 힌트 {"type","x","y"} 또는 빈 dict
         "total_rows": int,           # LIMIT 적용 전 실제 전체 매칭/집계 행수
+        "is_ambiguous": bool,        # 기준이 모호해 답을 보류했는지
+        "ambiguous_ask": str,        # 보류 시 사용자에게 되물을 문장
     }
+
+    is_ambiguous 가 True면 SQL을 실행하지 않고 바로 반환한다. 이때
+    사용자의 명확화 답변을 받아 spec_store 에 명세로 저장해두면, 다음
+    같은 질문부터는 spec_text 를 통해 정상적으로 답하게 된다.
     """
 
     def notify(message: str) -> None:
         if on_progress is not None:
             on_progress(message)
 
+    def failed(answer: str, validation: str, sql: str = "") -> dict:
+        """실행까지 가지 못한 경우의 공통 반환값."""
+        return {
+            "answer": answer,
+            "data": [],
+            "table": ALLOWED_TABLE,
+            "recognized_columns": [],
+            "sql": sql,
+            "validation": validation,
+            "chart": {},
+            "total_rows": 0,
+            "is_ambiguous": False,
+            "ambiguous_ask": "",
+        }
+
     # 1. 현재 업로드된 파일의 스키마를 동적으로 읽기
     notify("스키마를 확인하고 있습니다.")
     try:
         schema_str, allowed_cols = get_schema(con)
     except Exception as e:
-        return {
-            "answer": "데이터가 아직 로드되지 않았습니다. 파일을 먼저 업로드해 주세요.",
-            "data": [],
-            "table": ALLOWED_TABLE,
-            "recognized_columns": [],
-            "sql": "",
-            "validation": f"스키마 읽기 실패 - {e}",
-            "chart": {},
-            "total_rows": 0,
-        }
+        return failed(
+            "데이터가 아직 로드되지 않았습니다. 파일을 먼저 업로드해 주세요.",
+            f"스키마 읽기 실패 - {e}",
+        )
 
     # 2. SQL + 차트 힌트 생성
     notify("SQL과 차트를 생성하고 있습니다.")
-    generated = generate_sql_and_chart(question, schema_str)
+    generated = generate_sql_and_chart(question, schema_str, spec_text)
     sql = generated["sql"]
     chart_hint = generated["chart"]
+
+    # 2-1. 기준이 모호하면 여기서 멈추고 사용자에게 되묻는다.
+    #      (정확도가 최우선이라 추측해서 답하지 않는다. 사용자가 알려준
+    #       기준은 명세로 저장돼 다음 같은 질문부터 spec_text 로 들어온다.)
+    ambiguous = generated.get("ambiguous")
+    if ambiguous:
+        ask = ambiguous.get("ask") or "어떤 기준으로 볼지 구체적으로 알려주세요."
+        reason = ambiguous.get("reason") or "질문의 기준이 명확하지 않습니다."
+        result = failed(reason, f"보류 - {reason}", sql)
+        result["is_ambiguous"] = True
+        result["ambiguous_ask"] = ask
+        return result
 
     # 3. SQL 검증 (동적 컬럼 기반)
     notify("SQL을 검증하고 있습니다.")
     is_valid, error_message = validate_sql(sql, allowed_cols)
     if not is_valid:
-        return {
-            "answer": f"SQL 검증에 실패했습니다: {error_message}",
-            "data": [],
-            "table": ALLOWED_TABLE,
-            "recognized_columns": [],
-            "sql": sql,
-            "validation": f"실패 - {error_message}",
-            "chart": {},
-            "total_rows": 0,
-        }
+        return failed(
+            f"SQL 검증에 실패했습니다: {error_message}",
+            f"실패 - {error_message}",
+            sql,
+        )
 
     # 4. 결과 행수 상한 적용 후 실행
     #    (수십 GB 규모 파일에서 LIMIT 없는 쿼리가 전체를 끌고 오지 않도록 방지)
@@ -582,16 +660,7 @@ def answer_question(
     try:
         raw_result = con.execute(exec_sql).pl()
     except Exception as e:
-        return {
-            "answer": "SQL 실행 중 오류가 발생했습니다.",
-            "data": [],
-            "table": ALLOWED_TABLE,
-            "recognized_columns": [],
-            "sql": sql,
-            "validation": f"실행 오류 - {e}",
-            "chart": {},
-            "total_rows": 0,
-        }
+        return failed("SQL 실행 중 오류가 발생했습니다.", f"실행 오류 - {e}", sql)
 
     # 상한 적용 시 같이 실어 보낸 실제 전체 매칭 행수를 분리해낸다.
     # (LIMIT으로 잘려도 "실제로 몇 건이었는지"를 잃어버리지 않기 위함)
@@ -637,4 +706,6 @@ def answer_question(
         "validation": validation_msg,
         "chart": chart,
         "total_rows": true_total,
+        "is_ambiguous": False,
+        "ambiguous_ask": "",
     }

@@ -22,6 +22,13 @@ from app import (
     connect_latest_parquet,
     answer_question,
 )
+from spec_store import (
+    add_spec,
+    delete_spec,
+    format_specs_for_prompt,
+    load_specs,
+    update_spec,
+)
 
 # 대용량 파일은 브라우저가 이 주소의 FastAPI 서버로 직접 청크 업로드한다.
 UPLOAD_SERVER_URL = os.environ.get("UPLOAD_SERVER_URL", "http://127.0.0.1:8000")
@@ -548,6 +555,132 @@ st.markdown(
         font-weight: 750;
     }}
 
+    /* ---- 기준이 모호해 답을 보류했을 때 보여주는 카드 ---- */
+    .clarify-card {{
+        margin: 10px 0 4px 0;
+        padding: 14px 16px;
+        border: 1px solid #e6b8b4;
+        border-left: 4px solid var(--sunny-red);
+        border-radius: 14px;
+        background: #fdf4f3;
+        color: #7d3a35;
+        font-size: 14.5px;
+        line-height: 1.75;
+    }}
+
+    .clarify-title {{
+        display: block;
+        margin-bottom: 4px;
+        color: var(--sunny-red-dark);
+        font-size: 13px;
+        font-weight: 800;
+    }}
+
+    .clarify-ask {{
+        display: block;
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px dashed rgba(217, 47, 39, 0.28);
+        color: #5f2f2b;
+        font-weight: 700;
+    }}
+
+    /* ---- 오른쪽 질의 명세서 패널 ----
+       .block-container 가 스크롤 컨테이너이므로, 그 안에서 sticky를 주면
+       대화가 길어져도 패널이 오른쪽에 계속 붙어 있는다. 패널 자체가 길어질
+       때는 패널 안에서만 스크롤되게 한다. */
+    .st-key-spec_panel {{
+        position: sticky;
+        top: 0;
+        align-self: flex-start;
+        max-height: calc(100vh - 210px);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding-right: 6px;
+    }}
+
+    .spec-panel-title {{
+        margin: 2px 0;
+        color: var(--sunny-navy);
+        font-size: 16px;
+        font-weight: 850;
+    }}
+
+    .spec-empty {{
+        margin-top: 12px;
+        padding: 18px 14px;
+        text-align: center;
+        color: #7c94a0;
+        font-size: 12.5px;
+        line-height: 1.7;
+        border-radius: 14px;
+        border: 1px dashed rgba(113, 170, 197, 0.40);
+        background: rgba(255, 255, 255, 0.55);
+    }}
+
+    @keyframes specSlideIn {{
+        from {{ opacity: 0; transform: translateX(16px); }}
+        to {{ opacity: 1; transform: translateX(0); }}
+    }}
+
+    .spec-card {{
+        margin-top: 12px;
+        padding: 12px 13px;
+        border-radius: 14px;
+        background: #ffffff;
+        border: 1px solid #c7d4da;
+    }}
+
+    .spec-card-highlight {{
+        animation: specSlideIn 0.45s ease;
+        border-color: rgba(239, 59, 50, 0.45);
+        box-shadow: 0 8px 22px rgba(239, 59, 50, 0.12);
+    }}
+
+    .spec-card-head {{
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        margin-bottom: 6px;
+    }}
+
+    .spec-index {{
+        color: var(--sunny-blue);
+        font-size: 11.5px;
+        font-weight: 800;
+    }}
+
+    .spec-badge {{
+        padding: 3px 8px;
+        border-radius: 999px;
+        font-size: 10.5px;
+        font-weight: 750;
+        white-space: nowrap;
+        color: var(--sunny-red-dark);
+        background: rgba(239, 59, 50, 0.12);
+    }}
+
+    .spec-question {{
+        color: #55707d;
+        font-size: 12.5px;
+        line-height: 1.55;
+        margin-bottom: 4px;
+    }}
+
+    .spec-answer {{
+        color: var(--sunny-navy);
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1.55;
+    }}
+
+    .spec-meta {{
+        margin-top: 6px;
+        color: #96acb6;
+        font-size: 10.5px;
+    }}
+
     @media (max-width: 768px) {{
         .block-container {{
             margin: 0;
@@ -583,10 +716,27 @@ if "data_loaded" not in st.session_state:
 if "row_count" not in st.session_state:
     st.session_state.row_count = 0
 
+# 질의 명세서 — 파일에 영구 저장되므로 세션 시작 시 한 번 읽어온다.
+if "specs" not in st.session_state:
+    st.session_state.specs = load_specs()
+
+# 기준이 모호해 답을 보류한 질문. 다음 사용자 입력을 이 질문에 대한
+# 명확화 답변으로 해석하기 위해 들고 있는다.
+if "pending_clarification" not in st.session_state:
+    st.session_state.pending_clarification = None
+
+if "show_spec_panel" not in st.session_state:
+    st.session_state.show_spec_panel = False
+
+# 방금 추가된 명세를 패널에서 강조 표시하기 위한 id
+if "latest_spec_id" not in st.session_state:
+    st.session_state.latest_spec_id = None
+
 
 def reset_chat() -> None:
     st.session_state.messages = []
     st.session_state.pending_prompt = None
+    st.session_state.pending_clarification = None
 
 
 # ---------------------------------------------------------
@@ -677,7 +827,7 @@ with st.sidebar:
             "전송합니다. 먼저 backend 서버를 실행해 주세요:"
         )
         st.code("uvicorn backend.upload_server:app --port 8000", language="bash")
-        st.iframe(build_chunk_uploader_html(UPLOAD_SERVER_URL), height=150)
+        components.html(build_chunk_uploader_html(UPLOAD_SERVER_URL), height=150)
 
         if st.button("업로드한 데이터 불러오기", use_container_width=True):
             with st.spinner("최근 업로드된 데이터를 연결하는 중..."):
@@ -757,7 +907,91 @@ def highlight_numbers(text: str) -> str:
     return _NUMBER_PATTERN.sub(_wrap, text)
 
 
+def render_spec_panel() -> None:
+    """오른쪽 질의 명세서 패널. 확정된 해석 기준이 쌓이는 곳."""
+    with st.container(key="spec_panel"):
+        st.markdown(
+            '<div class="spec-panel-title">📋 질의 명세서</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption("기준이 모호했던 질문에 답해주시면 여기에 쌓이고, 다음부터는 되묻지 않습니다.")
+
+        specs = st.session_state.specs
+        if not specs:
+            st.markdown(
+                """
+                <div class="spec-empty">
+                    아직 확정된 기준이 없습니다.<br>
+                    챗봇이 되물었을 때 답해주시면<br>
+                    여기에 자동으로 추가됩니다.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            return
+
+        keyword = st.text_input(
+            "명세 검색",
+            placeholder="질문 또는 기준으로 검색",
+            label_visibility="collapsed",
+            key="spec_search",
+        )
+
+        shown = 0
+        for index, entry in enumerate(reversed(specs), start=1):
+            haystack = (
+                f"{entry.get('trigger_question', '')} {entry.get('clarification', '')}"
+            ).lower()
+            if keyword and keyword.lower() not in haystack:
+                continue
+
+            shown += 1
+            is_latest = entry.get("id") == st.session_state.latest_spec_id
+            badge = '<span class="spec-badge">방금 추가됨</span>' if is_latest else ""
+
+            # 마크다운은 빈 줄을 만나면 HTML 블록을 끊고 나머지를 본문 텍스트로
+            # 취급한다. 배지처럼 비어 있을 수 있는 값이 있으므로 줄바꿈 없이
+            # 한 줄로 이어 붙인다.
+            st.markdown(
+                f'<div class="spec-card{" spec-card-highlight" if is_latest else ""}">'
+                f'<div class="spec-card-head">'
+                f'<span class="spec-index">#{len(specs) - index + 1}</span>{badge}'
+                f"</div>"
+                f'<div class="spec-question">Q. {entry.get("trigger_question", "")}</div>'
+                f'<div class="spec-answer">→ {entry.get("clarification", "")}</div>'
+                f'<div class="spec-meta">{entry.get("created_at", "")} 확정</div>'
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+            with st.expander("상세 / 삭제"):
+                if entry.get("ambiguous_reason"):
+                    st.caption(f"보류 사유: {entry['ambiguous_reason']}")
+                if entry.get("resolved_sql"):
+                    st.code(entry["resolved_sql"], language="sql")
+                if st.button("이 명세 삭제", key=f"del_{entry.get('id')}"):
+                    delete_spec(entry["id"])
+                    st.session_state.specs = load_specs()
+                    st.rerun()
+
+        if keyword and shown == 0:
+            st.caption("검색 결과가 없습니다.")
+
+
 def render_assistant_message(message: dict[str, Any]) -> None:
+    # 기준이 모호해 답을 보류한 경우 — 결과 대신 되묻는 카드를 보여준다.
+    if message.get("is_ambiguous"):
+        ask = message.get("ambiguous_ask", "")
+        ask_html = f'<span class="clarify-ask">{ask}</span>' if ask else ""
+        st.markdown(
+            f'<div class="clarify-card">'
+            f'<span class="clarify-title">🔒 정확도를 위해 답변을 보류했습니다</span>'
+            f'{message["content"]}{ask_html}'
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        return
+
     st.markdown(
         f'<div class="answer-summary">{highlight_numbers(message["content"])}</div>',
         unsafe_allow_html=True,
@@ -832,141 +1066,209 @@ else:
     hero_badge_class = "hero-badge hero-badge--offline"
     hero_badge_text = "○ 데이터 미연결"
 
-st.markdown(
-    f"""
-    <section class="hero">
-        <div class="{hero_badge_class}">{hero_badge_text}</div>
-        <h1 class="hero-title">SUNNY 데이터 챗봇</h1>
-        <p class="hero-description">
-            품질 데이터를 자연어로 검색하고, 조회 결과를 표와 그래프로 확인하세요.
-        </p>
-    </section>
-    """,
-    unsafe_allow_html=True,
-)
+hero_col, toggle_col = st.columns([5, 1.4], vertical_alignment="center")
 
-if not st.session_state.messages:
-    if st.session_state.data_loaded:
-        welcome_text = "아래 추천 질문을 누르거나 채팅창에 직접 질문해 보세요."
-    else:
-        welcome_text = (
-            "먼저 왼쪽 사이드바에서 CSV 파일을 업로드해 주세요.<br>"
-            "업로드가 끝나면 아래 추천 질문을 누르거나 채팅창에 직접 질문할 수 있어요."
-        )
-
+with hero_col:
     st.markdown(
         f"""
-        <div class="welcome-card">
-            <div class="welcome-title">안녕하세요! 써니가 데이터를 찾아드릴게요 ☀️</div>
-            <div class="welcome-text">
-                {welcome_text}
-            </div>
-        </div>
+        <section class="hero">
+            <div class="{hero_badge_class}">{hero_badge_text}</div>
+            <h1 class="hero-title">SUNNY 데이터 챗봇</h1>
+            <p class="hero-description">
+                품질 데이터를 자연어로 검색하고, 조회 결과를 표와 그래프로 확인하세요.
+            </p>
+        </section>
         """,
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="quick-title">추천 질문</div>', unsafe_allow_html=True)
-    q1, q2, q3 = st.columns(3)
+with toggle_col:
+    spec_count = len(st.session_state.specs)
+    if st.button(
+        f"📋 명세서 {spec_count}" if spec_count else "📋 명세서",
+        use_container_width=True,
+    ):
+        st.session_state.show_spec_panel = not st.session_state.show_spec_panel
+        st.rerun()
 
-    with q1:
-        if st.button("제품군별 LVD 불량 건수", use_container_width=True):
-            st.session_state.pending_prompt = "제품군별 LVD 불량 건수를 보여줘"
-            st.rerun()
+if st.session_state.show_spec_panel:
+    main_col, spec_col = st.columns([2, 1], gap="large")
+    with spec_col:
+        render_spec_panel()
+else:
+    main_col = st.container()
 
-    with q2:
-        if st.button("월별 불량 추이", use_container_width=True):
-            st.session_state.pending_prompt = "월별 불량 건수 추이를 보여줘"
-            st.rerun()
-
-    with q3:
-        if st.button("공정별 불량률 비교", use_container_width=True):
-            st.session_state.pending_prompt = "공정별 불량률을 비교해줘"
-            st.rerun()
-
-
-for message in st.session_state.messages:
-    avatar = sunny_avatar if message["role"] == "assistant" else "👤"
-
-    with st.chat_message(message["role"], avatar=avatar):
-        if message["role"] == "assistant":
-            render_assistant_message(message)
-        else:
-            st.markdown(message["content"])
-
+# 채팅 입력창은 화면 맨 아래 고정 영역이라 컬럼 밖(최상위)에서 만들어야 한다.
 typed_prompt = st.chat_input("품질 데이터에 대해 질문해 주세요.")
 prompt = st.session_state.pending_prompt or typed_prompt
 
-if prompt:
-    st.session_state.pending_prompt = None
-
-    user_message = {
-        "role": "user",
-        "content": prompt,
-    }
-    st.session_state.messages.append(user_message)
-
-    with st.chat_message("user", avatar="👤"):
-        st.markdown(prompt)
-
-    with st.chat_message("assistant", avatar=sunny_avatar):
-        completed_steps: list[str] = []
-
-        if not st.session_state.data_loaded:
-            st.warning("사이드바에서 CSV 파일을 먼저 업로드해 주세요.")
-            st.stop()
-
-        with st.status("질문을 처리하고 있습니다.", expanded=True) as status:
-            result = answer_question(
-                st.session_state.con,
-                prompt,
-                on_progress=lambda msg: status.write(f"⏳ {msg}"),
+with main_col:
+    if not st.session_state.messages:
+        if st.session_state.data_loaded:
+            welcome_text = "아래 추천 질문을 누르거나 채팅창에 직접 질문해 보세요."
+        else:
+            welcome_text = (
+                "먼저 왼쪽 사이드바에서 CSV 파일을 업로드해 주세요.<br>"
+                "업로드가 끝나면 아래 추천 질문을 누르거나 채팅창에 직접 질문할 수 있어요."
             )
 
-            status.update(
-                label="분석이 완료되었습니다.",
-                state="complete",
-                expanded=False,
-            )
-
-        assistant_message = {
-            "role": "assistant",
-            "content": result["answer"],
-            "data": result["data"],
-            "verification": {
-                "table": result["table"],
-                "recognized_columns": result["recognized_columns"],
-                "sql": result["sql"],
-                "validation": result["validation"],
-                "row_count": len(result["data"]),
-                "total_rows": result.get("total_rows", len(result["data"])),
-                "chart": result.get("chart", {}),
-            },
-            "steps": completed_steps,
-        }
-
-        render_assistant_message(assistant_message)
-        st.session_state.messages.append(assistant_message)
-
-        # 새 메시지가 실제로 추가된 이번 rerun에서만 맨 아래로 스크롤한다.
-        # (탭/펼치기 클릭처럼 새 메시지 없이 rerun되는 경우까지 계속
-        # 지켜보다가 스크롤을 채가면, 위로 스크롤해서 예전 메시지의
-        # 탭/펼치기를 클릭할 때마다 화면이 도로 아래로 튕기게 된다.)
-        components.html(
-            """
-            <script>
-            (function () {
-                const doc = window.parent.document;
-                function scrollToBottom() {
-                    const el = doc.querySelector('.block-container');
-                    if (el) el.scrollTop = el.scrollHeight;
-                }
-                scrollToBottom();
-                // 이미지/폰트 등으로 레이아웃이 뒤늦게 자리잡는 경우를 대비해
-                // 한 번 더 시도한다. (계속 지켜보는 옵저버는 두지 않는다.)
-                setTimeout(scrollToBottom, 150);
-            })();
-            </script>
+        st.markdown(
+            f"""
+            <div class="welcome-card">
+                <div class="welcome-title">안녕하세요! 써니가 데이터를 찾아드릴게요 ☀️</div>
+                <div class="welcome-text">
+                    {welcome_text}
+                </div>
+            </div>
             """,
-            height=0,
+            unsafe_allow_html=True,
         )
+
+        st.markdown('<div class="quick-title">추천 질문</div>', unsafe_allow_html=True)
+        q1, q2, q3 = st.columns(3)
+
+        with q1:
+            if st.button("제품군별 LVD 불량 건수", use_container_width=True):
+                st.session_state.pending_prompt = "제품군별 LVD 불량 건수를 보여줘"
+                st.rerun()
+
+        with q2:
+            if st.button("월별 불량 추이", use_container_width=True):
+                st.session_state.pending_prompt = "월별 불량 건수 추이를 보여줘"
+                st.rerun()
+
+        with q3:
+            if st.button("공정별 불량률 비교", use_container_width=True):
+                st.session_state.pending_prompt = "공정별 불량률을 비교해줘"
+                st.rerun()
+
+    for message in st.session_state.messages:
+        avatar = sunny_avatar if message["role"] == "assistant" else "👤"
+
+        with st.chat_message(message["role"], avatar=avatar):
+            if message["role"] == "assistant":
+                render_assistant_message(message)
+            else:
+                st.markdown(message["content"])
+
+    if prompt:
+        st.session_state.pending_prompt = None
+
+        user_message = {
+            "role": "user",
+            "content": prompt,
+        }
+        st.session_state.messages.append(user_message)
+
+        with st.chat_message("user", avatar="👤"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant", avatar=sunny_avatar):
+            if not st.session_state.data_loaded:
+                st.warning("사이드바에서 CSV 파일을 먼저 업로드해 주세요.")
+                st.stop()
+
+            pending = st.session_state.pending_clarification
+            spec_saved = None
+
+            # 직전에 답을 보류했다면, 이번 입력은 그 질문에 대한 명확화
+            # 답변이다. 명세로 저장한 뒤 원래 질문을 다시 실행한다.
+            if pending is not None:
+                spec_saved = add_spec(
+                    trigger_question=pending["question"],
+                    clarification=prompt,
+                    ambiguous_reason=pending["reason"],
+                )
+                st.session_state.specs = load_specs()
+                st.session_state.latest_spec_id = spec_saved["id"]
+                st.session_state.pending_clarification = None
+                st.session_state.show_spec_panel = True
+                question_to_run = pending["question"]
+            else:
+                question_to_run = prompt
+
+            with st.status("질문을 처리하고 있습니다.", expanded=True) as status:
+                result = answer_question(
+                    st.session_state.con,
+                    question_to_run,
+                    on_progress=lambda msg: status.write(f"⏳ {msg}"),
+                    spec_text=format_specs_for_prompt(st.session_state.specs),
+                )
+
+                status.update(
+                    label="분석이 완료되었습니다.",
+                    state="complete",
+                    expanded=False,
+                )
+
+            if result.get("is_ambiguous"):
+                # 아직 기준을 모르는 질문 — 답하지 않고 되묻는다.
+                st.session_state.pending_clarification = {
+                    "question": question_to_run,
+                    "reason": result["answer"],
+                }
+                assistant_message = {
+                    "role": "assistant",
+                    "content": result["answer"],
+                    "is_ambiguous": True,
+                    "ambiguous_ask": result.get("ambiguous_ask", ""),
+                }
+            else:
+                answer = result["answer"]
+                if spec_saved is not None:
+                    # 방금 확정한 기준을 실제로 적용했다는 걸 분명히 알려준다.
+                    answer = (
+                        f"확인했습니다. 앞으로 이 질문은 "
+                        f"'{spec_saved['clarification']}' 기준으로 답변할게요. "
+                        f"오른쪽 명세서에 추가했습니다.\n\n{answer}"
+                    )
+                    # 확정된 기준으로 실제 실행된 SQL을 근거로 함께 보관한다.
+                    if result.get("sql"):
+                        st.session_state.specs = update_spec(
+                            spec_saved["id"], resolved_sql=result["sql"]
+                        )
+
+                assistant_message = {
+                    "role": "assistant",
+                    "content": answer,
+                    "data": result["data"],
+                    "verification": {
+                        "table": result["table"],
+                        "recognized_columns": result["recognized_columns"],
+                        "sql": result["sql"],
+                        "validation": result["validation"],
+                        "row_count": len(result["data"]),
+                        "total_rows": result.get("total_rows", len(result["data"])),
+                        "chart": result.get("chart", {}),
+                    },
+                }
+
+            render_assistant_message(assistant_message)
+            st.session_state.messages.append(assistant_message)
+
+            # 새 메시지가 실제로 추가된 이번 rerun에서만 맨 아래로 스크롤한다.
+            # (탭/펼치기 클릭처럼 새 메시지 없이 rerun되는 경우까지 계속
+            # 지켜보다가 스크롤을 채가면, 위로 스크롤해서 예전 메시지의
+            # 탭/펼치기를 클릭할 때마다 화면이 도로 아래로 튕기게 된다.)
+            components.html(
+                """
+                <script>
+                (function () {
+                    const doc = window.parent.document;
+                    function scrollToBottom() {
+                        const el = doc.querySelector('.block-container');
+                        if (el) el.scrollTop = el.scrollHeight;
+                    }
+                    scrollToBottom();
+                    // 이미지/폰트 등으로 레이아웃이 뒤늦게 자리잡는 경우를 대비해
+                    // 한 번 더 시도한다. (계속 지켜보는 옵저버는 두지 않는다.)
+                    setTimeout(scrollToBottom, 150);
+                })();
+                </script>
+                """,
+                height=0,
+            )
+
+        # 명세가 새로 추가됐다면 패널/카운트를 즉시 반영하기 위해 다시 그린다.
+        if spec_saved is not None:
+            st.rerun()
