@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -717,6 +718,11 @@ if "data_loaded" not in st.session_state:
 if "row_count" not in st.session_state:
     st.session_state.row_count = 0
 
+# 방금 처리한 file_uploader 파일의 식별자. 같은 파일이 매 rerun마다
+# 반복 처리되는 것을 막기 위한 용도.
+if "loaded_file_id" not in st.session_state:
+    st.session_state.loaded_file_id = None
+
 # 추천 질문은 업로드된 파일의 컬럼에 따라 달라지므로 파일을 새로 올릴 때마다
 # 다시 만든다. (고정 질문을 두면 컬럼이 다른 파일에서 전부 헛질문이 된다)
 if "suggested_questions" not in st.session_state:
@@ -725,6 +731,10 @@ if "suggested_questions" not in st.session_state:
 # 답변이 새로 추가된 직후 한 번만 맨 아래로 스크롤하기 위한 플래그
 if "scroll_to_bottom" not in st.session_state:
     st.session_state.scroll_to_bottom = False
+
+# "최근 대화"에서 특정 질문을 클릭했을 때 그 위치로 스크롤하기 위한 대상 id
+if "scroll_to_message_id" not in st.session_state:
+    st.session_state.scroll_to_message_id = None
 
 # 질의 명세서 — 파일에 영구 저장되므로 세션 시작 시 한 번 읽어온다.
 if "specs" not in st.session_state:
@@ -776,14 +786,23 @@ with st.sidebar:
 
     st.markdown("##### 최근 대화")
 
-    if st.session_state.messages:
-        user_messages = [
-            message["content"]
-            for message in st.session_state.messages
-            if message["role"] == "user"
-        ]
-        for title in reversed(user_messages[-5:]):
-            st.caption(f"• {title[:24]}")
+    user_messages = [
+        message
+        for message in st.session_state.messages
+        if message["role"] == "user"
+    ]
+
+    if user_messages:
+        for message in reversed(user_messages[-5:]):
+            title = message["content"]
+            label = title if len(title) <= 24 else title[:24] + "…"
+            if st.button(
+                f"💬 {label}",
+                key=f"jump_{message['id']}",
+                use_container_width=True,
+            ):
+                st.session_state.scroll_to_message_id = message["id"]
+                st.rerun()
     else:
         st.caption("아직 대화 기록이 없습니다.")
 
@@ -796,7 +815,12 @@ with st.sidebar:
         label_visibility="collapsed",
     )
 
-    if uploaded_file is not None:
+    # file_uploader는 사용자가 파일을 바꾸지 않는 한 매 rerun마다 같은
+    # UploadedFile을 계속 반환한다. file_id로 "이미 처리한 파일인지"를
+    # 확인하지 않으면, 채팅 메시지를 보내거나 버튼을 누를 때마다 CSV를
+    # 통째로 다시 읽고 추천 질문까지 Claude를 다시 호출하게 되어 모든
+    # 상호작용이 매번 몇 배로 느려진다.
+    if uploaded_file is not None and uploaded_file.file_id != st.session_state.loaded_file_id:
         if uploaded_file.size > 500 * 1024 * 1024:
             st.warning(
                 "500MB가 넘는 파일은 메모리 사용량이 커서 느리거나 실패할 수 "
@@ -808,6 +832,7 @@ with st.sidebar:
                 st.session_state.data_loaded = True
                 st.session_state.row_count = row_count
                 st.session_state.messages = []
+                st.session_state.loaded_file_id = uploaded_file.file_id
                 st.session_state.suggested_questions = suggest_questions(
                     st.session_state.con
                 )
@@ -1157,6 +1182,13 @@ with main_col:
     for message in st.session_state.messages:
         avatar = sunny_avatar if message["role"] == "assistant" else "👤"
 
+        if message["role"] == "user" and message.get("id"):
+            # "최근 대화"에서 이 질문을 클릭했을 때 스크롤로 찾아올 지점.
+            st.markdown(
+                f'<div id="chat-anchor-{message["id"]}"></div>',
+                unsafe_allow_html=True,
+            )
+
         with st.chat_message(message["role"], avatar=avatar):
             if message["role"] == "assistant":
                 render_assistant_message(message)
@@ -1167,6 +1199,7 @@ with main_col:
         st.session_state.pending_prompt = None
 
         user_message = {
+            "id": str(uuid.uuid4()),
             "role": "user",
             "content": prompt,
         }
@@ -1282,6 +1315,35 @@ with main_col:
                 // 한 번 더 시도한다. (계속 지켜보는 옵저버는 두지 않는다.)
                 setTimeout(scrollToBottom, 150);
             })();
+            </script>
+            """,
+            height=0,
+        )
+
+    # 사이드바 "최근 대화"에서 특정 질문을 클릭했을 때, 그 질문이 있는
+    # 위치로 스크롤한다. (부모 문서를 iframe 너머로 조작하는 상황이라
+    # 'smooth' 애니메이션은 신뢰할 수 없어 즉시 이동시킨다 — 아래
+    # scroll-to-bottom과 동일한 방식)
+    if st.session_state.scroll_to_message_id:
+        target_id = st.session_state.scroll_to_message_id
+        st.session_state.scroll_to_message_id = None
+        components.html(
+            f"""
+            <script>
+            (function () {{
+                const doc = window.parent.document;
+                function scrollToAnchor() {{
+                    const el = doc.getElementById('chat-anchor-{target_id}');
+                    const container = doc.querySelector('.block-container');
+                    if (el && container) el.scrollIntoView({{behavior: 'auto', block: 'start'}});
+                }}
+                // 데이터 표/차트/탭처럼 뒤늦게 자리를 잡는 요소가 있으면 그
+                // 레이아웃 변화가 스크롤 위치를 다시 밀어내므로, 짧은 간격으로
+                // 여러 번 재조준한다. (마지막 시도가 최종 위치를 확정)
+                [0, 150, 400, 900, 1500].forEach((delay) => {{
+                    setTimeout(scrollToAnchor, delay);
+                }});
+            }})();
             </script>
             """,
             height=0,
