@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import anthropic
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -1274,19 +1275,35 @@ with main_col:
             else:
                 question_to_run = prompt
 
-            with st.status("질문을 처리하고 있습니다.", expanded=True) as status:
-                result = answer_question(
-                    st.session_state.con,
-                    question_to_run,
-                    on_progress=lambda msg: status.write(f"⏳ {msg}"),
-                    spec_text=format_specs_for_prompt(st.session_state.specs),
-                )
+            try:
+                with st.status("질문을 처리하고 있습니다.", expanded=True) as status:
+                    result = answer_question(
+                        st.session_state.con,
+                        question_to_run,
+                        on_progress=lambda msg: status.write(f"⏳ {msg}"),
+                        spec_text=format_specs_for_prompt(st.session_state.specs),
+                    )
 
-                status.update(
-                    label="분석이 완료되었습니다.",
-                    state="complete",
-                    expanded=False,
-                )
+                    status.update(
+                        label="분석이 완료되었습니다.",
+                        state="complete",
+                        expanded=False,
+                    )
+            except anthropic.APIStatusError as e:
+                if e.status_code == 400 and "credit balance" in str(e).lower():
+                    st.error(
+                        "Anthropic API 크레딧이 부족합니다. "
+                        "https://console.anthropic.com/settings/billing 에서 "
+                        "충전한 뒤 다시 시도해 주세요."
+                    )
+                elif e.status_code == 429:
+                    st.error("요청이 몰려 잠시 제한되었습니다. 잠시 후 다시 시도해 주세요.")
+                else:
+                    st.error(f"AI 응답 생성 중 오류가 발생했습니다: {e}")
+                st.stop()
+            except Exception as e:
+                st.error(f"질문을 처리하는 중 예상치 못한 오류가 발생했습니다: {e}")
+                st.stop()
 
             if result.get("is_ambiguous"):
                 # 아직 기준을 모르는 질문 — 답하지 않고 되묻는다.
